@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx expo *)",
+      "Bash(ipconfig getifaddr *)",
+      "Bash(curl -s -H \"expo-platform: ios\" http://localhost:8081/)",
+      "Bash(curl -sv -H \"Expo-Platform: ios\" http://localhost:8081/)",
+      "Bash(npx --yes qrcode-terminal \"exp://zctgdfs-anonymous-8081.exp.direct\")",
+      "Bash(npx --yes qrcode --output /tmp/expo-qr.png \"exp://zctgdfs-anonymous-8081.exp.direct\")",
+      "Bash(open /tmp/expo-qr.png)",
+      "Bash(curl -s -H \"Expo-Platform: ios\" http://localhost:8081/)"
+    ]
+  }
+}
