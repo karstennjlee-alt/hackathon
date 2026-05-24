@@ -54,6 +54,7 @@ import {
   Megaphone,
   Radio,
   RefreshCcw,
+  Settings as SettingsIcon,
   Shield,
   ShieldCheck,
   Siren,
@@ -373,7 +374,16 @@ type BeaconEvent =
       audience: 'students' | 'parents' | 'teachers' | 'everyone' | 'both';
       message: string;
       at: number;
+    }
+  | {
+      type: 'CAMPUS_THREAT';
+      id: string;
+      status: 'active' | 'cleared';
+      actorName: string;
+      at: number;
     };
+
+const PRINCIPAL_PASSWORD = 'cwb';
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -649,6 +659,34 @@ function notesForStudent(
   );
 }
 
+function latestCampusThreat(
+  events: BeaconEvent[],
+): Extract<BeaconEvent, { type: 'CAMPUS_THREAT' }> | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === 'CAMPUS_THREAT') return ev;
+  }
+  return null;
+}
+
+function isCampusThreatActive(events: BeaconEvent[]): boolean {
+  const latest = latestCampusThreat(events);
+  return Boolean(latest && latest.status === 'active');
+}
+
+async function sendCampusThreat(
+  status: 'active' | 'cleared',
+  actorName: string,
+): Promise<void> {
+  await appendEvent({
+    type: 'CAMPUS_THREAT',
+    id: `threat-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    status,
+    actorName,
+    at: Date.now(),
+  });
+}
+
 async function sendChatMessage(
   sender: 'staff' | 'parent',
   senderName: string,
@@ -672,6 +710,99 @@ const ADMIN_STAFF_ID = 'staff-whitman';
 
 function isAdminProfile(profile: Profile | null): boolean {
   return profile?.role === 'staff' && profile.staffId === ADMIN_STAFF_ID;
+}
+
+const THEME_STORAGE_KEY = 'beacon5.theme.v1';
+
+async function loadThemeMode(): Promise<'dark' | 'light'> {
+  try {
+    const raw = await AsyncStorage.getItem(THEME_STORAGE_KEY);
+    return raw === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+async function saveThemeMode(mode: 'dark' | 'light'): Promise<void> {
+  try {
+    await AsyncStorage.setItem(THEME_STORAGE_KEY, mode);
+  } catch {
+    // best effort
+  }
+}
+
+type ThemePalette = {
+  mode: 'dark' | 'light';
+  text: string;
+  textMuted: string;
+  textInverse: string;
+  panelBg: string;
+  panelBorder: string;
+  surface: string;
+  surfaceMuted: string;
+  brandSub: string;
+  divider: string;
+};
+
+const darkPalette: ThemePalette = {
+  mode: 'dark',
+  text: '#f4f4f5',
+  textMuted: '#a1a1aa',
+  textInverse: '#0a0a0b',
+  panelBg: 'rgba(12,12,13,0.82)',
+  panelBorder: 'rgba(76,69,70,0.54)',
+  surface: 'rgba(20,20,22,0.74)',
+  surfaceMuted: 'rgba(20,20,22,0.45)',
+  brandSub: '#7d7d83',
+  divider: 'rgba(255,255,255,0.06)',
+};
+
+const lightPalette: ThemePalette = {
+  mode: 'light',
+  text: '#0f172a',
+  textMuted: '#475569',
+  textInverse: '#ffffff',
+  panelBg: 'rgba(255,255,255,0.85)',
+  panelBorder: 'rgba(15,23,42,0.18)',
+  surface: 'rgba(255,255,255,0.78)',
+  surfaceMuted: 'rgba(241,245,249,0.85)',
+  brandSub: '#475569',
+  divider: 'rgba(15,23,42,0.1)',
+};
+
+const paletteFor = (mode: 'dark' | 'light'): ThemePalette =>
+  mode === 'light' ? lightPalette : darkPalette;
+
+async function polishMassBroadcast(
+  draft: string,
+  audienceLabel: string,
+  senderName: string,
+  events: BeaconEvent[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const trimmed = draft.trim();
+  if (!trimmed) return trimmed;
+  const activeIncidents = deriveActiveIncidents(events);
+  const threatActive = isCampusThreatActive(events);
+  const recentNotes = events
+    .filter((e): e is Extract<BeaconEvent, { type: 'INCIDENT_NOTE' }> => e.type === 'INCIDENT_NOTE')
+    .slice(-4)
+    .map((n) => `- ${n.studentName} (${n.kind}): ${n.polishedNote}`)
+    .join('\n');
+  const activeList = activeIncidents
+    .map((i) => `- ${i.studentName} in ${i.zoneDescription ?? 'unknown area'}`)
+    .join('\n') || '(none)';
+  const prompt = `You are the official campus safety voice writing a mass broadcast for ${audienceLabel}. The admin ${senderName} drafted the message below. Rewrite it as a single calm, clear, official message based on the live situation. Be concise (max 2 short sentences, ~40 words). Include only facts that are present in the draft or the situation snapshot — never invent details. Do NOT mention 911/police/EMS. Do NOT start with "Update:" or "Attention:". Output ONLY the polished broadcast text, no preamble.
+
+Campus threat active: ${threatActive ? 'YES' : 'no'}
+Active beacons:
+${activeList}
+Recent reports:
+${recentNotes || '(none)'}
+
+Admin draft: "${trimmed}"`;
+  const result = await callGemini(prompt, signal);
+  return result?.trim() || trimmed;
 }
 
 function massBroadcastsFor(
@@ -965,6 +1096,10 @@ export default function App() {
   const lastNotifiedMassRef = useRef<string | null>(null);
   const watchSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
+  const [themeMode, setThemeMode] = useState<'dark' | 'light'>('dark');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [threatModalOpen, setThreatModalOpen] = useState(false);
+
   const mode: Mode = profile?.role ?? 'student';
 
   useEffect(() => {
@@ -972,7 +1107,25 @@ export default function App() {
       setProfile(p);
       setProfileLoaded(true);
     });
+    loadThemeMode().then(setThemeMode);
   }, []);
+
+  const toggleTheme = (next: 'dark' | 'light') => {
+    setThemeMode(next);
+    saveThemeMode(next).catch(() => undefined);
+  };
+
+  const onActivateCampusThreat = async () => {
+    if (!profile || profile.role !== 'staff') return;
+    await sendCampusThreat('active', profile.staffName);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+  };
+
+  const onClearCampusThreat = async () => {
+    if (!profile || profile.role !== 'staff') return;
+    await sendCampusThreat('cleared', profile.staffName);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+  };
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -1029,7 +1182,9 @@ export default function App() {
       const broadcast = latestBroadcastForStudent(events, profile.linkedStudentId);
       if (broadcast && lastNotifiedBroadcastRef.current !== broadcast.id) {
         lastNotifiedBroadcastRef.current = broadcast.id;
-        fireLocalNotification('Beacon5 update from staff', broadcast.message);
+        fireLocalNotification('Update from school staff', broadcast.message, {
+          subtitle: 'Beacon5',
+        });
       }
       const latestNote = events
         .filter(
@@ -1053,17 +1208,14 @@ export default function App() {
       const broadcast = latestBroadcastForStudent(events, profile.studentId);
       if (broadcast && lastNotifiedBroadcastRef.current !== broadcast.id) {
         lastNotifiedBroadcastRef.current = broadcast.id;
-        fireLocalNotification('Update from staff', broadcast.message);
+        fireLocalNotification('Update from school staff', broadcast.message, {
+          subtitle: 'Beacon5',
+        });
       }
     } else if (profile.role === 'staff') {
+      // Staff is actively monitoring the dashboard - no notification for new beacons.
       const last = activeIncidents[activeIncidents.length - 1];
-      if (last && lastNotifiedIncidentRef.current !== last.id) {
-        lastNotifiedIncidentRef.current = last.id;
-        fireLocalNotification(
-          `Beacon: ${last.studentName}`,
-          last.zoneDescription ?? 'Active beacon on campus.',
-        );
-      }
+      if (last) lastNotifiedIncidentRef.current = last.id;
     }
 
     // Mass broadcast notifications: fire only when the broadcast targets my role
@@ -1089,7 +1241,9 @@ export default function App() {
             : latestMass.audience === 'teachers'
               ? 'Teachers'
               : 'Everyone';
-      fireLocalNotification(`${latestMass.senderName} (${audienceLabel})`, latestMass.message);
+      fireLocalNotification(`${latestMass.senderName}`, latestMass.message, {
+        subtitle: `Campus broadcast — ${audienceLabel}`,
+      });
     }
 
     // Cross-role chat notifications: notify when the *other* side sends a message.
@@ -1107,7 +1261,11 @@ export default function App() {
         .slice(-1)[0];
       if (latestMessage && lastNotifiedChatRef.current !== latestMessage.id) {
         lastNotifiedChatRef.current = latestMessage.id;
-        fireLocalNotification(latestMessage.senderName, latestMessage.message);
+        fireLocalNotification(
+          `${latestMessage.senderName} messaged you`,
+          latestMessage.message,
+          { subtitle: 'Beacon5 chat' },
+        );
       }
     }
   }, [activeIncidents, events, profile]);
@@ -1144,6 +1302,10 @@ export default function App() {
         incidentEv.coords,
         incidentEv.zoneDescription,
       );
+      // Also clear any active campus threat as part of the all-clear.
+      if (isCampusThreatActive(events)) {
+        await sendCampusThreat('cleared', profile?.role === 'staff' ? profile.staffName : 'Staff');
+      }
       const broadcast: BeaconEvent = {
         type: 'STAFF_BROADCAST',
         id: `bcast-${Date.now()}`,
@@ -1154,6 +1316,20 @@ export default function App() {
       };
       await appendEvent(broadcast);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+      // Let the all-clear card render on every device, then wipe everything.
+      setTimeout(() => {
+        clearEvents().catch(() => undefined);
+        setEvents([]);
+        setIncident(null);
+        setReports(seedReports);
+        setStaffConfirmed(new Set());
+        lastNotifiedBroadcastRef.current = null;
+        lastNotifiedIncidentRef.current = null;
+        lastNotifiedNoteRef.current = null;
+        lastNotifiedChatRef.current = null;
+        lastNotifiedMassRef.current = null;
+        lastThreatHandledRef.current = null;
+      }, 6000);
     } finally {
       setGeneratingBroadcast(false);
     }
@@ -1165,6 +1341,41 @@ export default function App() {
     () => computeZoneVerifications(reports, staffConfirmed, now),
     [reports, staffConfirmed, now],
   );
+
+  const campusThreatActive = useMemo(() => isCampusThreatActive(events), [events]);
+  const lastThreatHandledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!profile) return;
+    const latest = latestCampusThreat(events);
+    if (!latest) return;
+    if (lastThreatHandledRef.current === latest.id) return;
+    lastThreatHandledRef.current = latest.id;
+    // Auto-clear a student's stale beacon if staff cleared the threat. Never auto-activate.
+    if (
+      latest.status === 'cleared' &&
+      profile.role === 'student' &&
+      incident
+    ) {
+      resetBeacon().catch(() => undefined);
+    }
+    // Single tidy notification per state change.
+    if (latest.status === 'active') {
+      fireLocalNotification(
+        'Campus threat declared',
+        profile.role === 'student'
+          ? `Hold your beacon if you need help. — ${latest.actorName}`
+          : `${latest.actorName} activated campus-wide tracking.`,
+        { critical: true, subtitle: 'Beacon5 — Lockdown' },
+      );
+    } else {
+      fireLocalNotification(
+        'Campus all clear',
+        `${latest.actorName} cleared the threat.`,
+        { subtitle: 'Beacon5' },
+      );
+    }
+  }, [events, profile, incident]);
 
   const activatePanic = async () => {
     if (!profile || profile.role !== 'student') return;
@@ -1431,9 +1642,14 @@ export default function App() {
 
   if (!profile) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar style="light" />
-        <LinearGradient colors={['#141414', '#050505', '#000000']} style={styles.root}>
+      <SafeAreaView style={[styles.safeArea, themeMode === 'light' && styles.lightSafeArea]}>
+        <StatusBar style={themeMode === 'light' ? 'dark' : 'light'} />
+        <LinearGradient
+          colors={
+            themeMode === 'light' ? ['#f5f5f7', '#e5e7eb', '#d4d4d8'] : ['#141414', '#050505', '#000000']
+          }
+          style={styles.root}
+        >
           <Onboarding onSelect={onSelectProfile} />
         </LinearGradient>
       </SafeAreaView>
@@ -1449,17 +1665,34 @@ export default function App() {
       ? activeIncidents.find((i) => i.studentId === profile.linkedStudentId) ?? null
       : null;
 
+  const latestThreat = latestCampusThreat(events);
+  const showCampusBanner = Boolean(latestThreat && latestThreat.status === 'active');
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="light" />
-      <LinearGradient colors={['#141414', '#050505', '#000000']} style={styles.root}>
+    <SafeAreaView style={[styles.safeArea, themeMode === 'light' && styles.lightSafeArea]}>
+      <StatusBar style={themeMode === 'light' ? 'dark' : 'light'} />
+      <LinearGradient
+        colors={
+          themeMode === 'light' ? ['#f5f5f7', '#e5e7eb', '#d4d4d8'] : ['#141414', '#050505', '#000000']
+        }
+        style={styles.root}
+      >
         <Header
           mode={mode}
           locationToken={mode === 'parent' && parentActiveIncident ? 'active' : locationToken}
           profile={profile}
           onSignOut={onResetProfile}
           notifPermitted={notifPermitted}
+          onOpenSettings={() => setSettingsOpen(true)}
+          themeMode={themeMode}
         />
+        {showCampusBanner ? (
+          <View style={styles.campusBanner}>
+            <AlertTriangle color="#fff" size={18} strokeWidth={3} />
+            <Text style={styles.campusBannerText}>CAMPUS THREAT ACTIVE — TRACKING ALL STUDENTS</Text>
+            <Text style={styles.campusBannerBy}>{latestThreat!.actorName.split(' ').slice(-1)[0]}</Text>
+          </View>
+        ) : null}
         {mode === 'student' ? (
           <StudentMode
             profile={profile as Extract<Profile, { role: 'student' }>}
@@ -1471,6 +1704,7 @@ export default function App() {
             onActivate={activatePanic}
             onReset={resetBeacon}
             onOpenEscalation={setEscalationSheet}
+            themeMode={themeMode}
           />
         ) : null}
         {mode === 'staff' ? (
@@ -1488,6 +1722,9 @@ export default function App() {
             onMarkConfirmed={markStaffConfirmed}
             onAllClear={onAllClear}
             onWipeEvents={onWipeEvents}
+            campusThreatActive={showCampusBanner}
+            onOpenThreatModal={() => setThreatModalOpen(true)}
+            themeMode={themeMode}
           />
         ) : null}
         {mode === 'parent' ? (
@@ -1499,6 +1736,7 @@ export default function App() {
             broadcast={parentLatestBroadcast}
             events={events}
             activeIncidents={activeIncidents}
+            themeMode={themeMode}
           />
         ) : null}
       </LinearGradient>
@@ -1508,7 +1746,162 @@ export default function App() {
         onClose={() => setEscalationSheet(null)}
         onSubmit={submitEscalation}
       />
+      <SettingsSheet
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        themeMode={themeMode}
+        onChangeTheme={toggleTheme}
+        onSignOut={() => {
+          setSettingsOpen(false);
+          onResetProfile();
+        }}
+        onWipeEvents={onWipeEvents}
+      />
+      <ThreatPasswordModal
+        visible={threatModalOpen}
+        threatActive={showCampusBanner}
+        onClose={() => setThreatModalOpen(false)}
+        onConfirm={async () => {
+          setThreatModalOpen(false);
+          if (showCampusBanner) await onClearCampusThreat();
+          else await onActivateCampusThreat();
+        }}
+      />
     </SafeAreaView>
+  );
+}
+
+function SettingsSheet({
+  visible,
+  onClose,
+  themeMode,
+  onChangeTheme,
+  onSignOut,
+  onWipeEvents,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  themeMode: 'dark' | 'light';
+  onChangeTheme: (m: 'dark' | 'light') => void;
+  onSignOut: () => void;
+  onWipeEvents: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.pwModalBackdrop} onPress={onClose}>
+        <Pressable style={styles.pwModalCard} onPress={() => undefined}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={styles.pwModalTitle}>Settings</Text>
+            <Pressable onPress={onClose} hitSlop={12}>
+              <X color="#f4f4f5" size={20} />
+            </Pressable>
+          </View>
+
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsRowLabel}>Appearance</Text>
+            <Pressable
+              onPress={() => onChangeTheme('dark')}
+              style={[styles.themeChip, themeMode === 'dark' ? styles.themeChipActive : styles.themeChipInactive]}
+            >
+              <Text style={[styles.themeChipText, { color: themeMode === 'dark' ? '#7dd3fc' : '#a1a1aa' }]}>
+                DARK
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => onChangeTheme('light')}
+              style={[styles.themeChip, themeMode === 'light' ? styles.themeChipActive : styles.themeChipInactive]}
+            >
+              <Text style={[styles.themeChipText, { color: themeMode === 'light' ? '#7dd3fc' : '#a1a1aa' }]}>
+                LIGHT
+              </Text>
+            </Pressable>
+          </View>
+
+          <Pressable onPress={onWipeEvents} style={styles.settingsRow}>
+            <RefreshCcw color="#a1a1aa" size={16} />
+            <Text style={styles.settingsRowLabel}>Reset demo events</Text>
+          </Pressable>
+
+          <Pressable onPress={onSignOut} style={styles.settingsRow}>
+            <LogOut color="#fb7185" size={16} />
+            <Text style={[styles.settingsRowLabel, { color: '#fb7185' }]}>Sign out</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function ThreatPasswordModal({
+  visible,
+  threatActive,
+  onClose,
+  onConfirm,
+}: {
+  visible: boolean;
+  threatActive: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [pw, setPw] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (visible) {
+      setPw('');
+      setError(null);
+      setBusy(false);
+    }
+  }, [visible]);
+  const submit = async () => {
+    if (busy) return;
+    if (pw.trim() !== PRINCIPAL_PASSWORD) {
+      setError('Incorrect password.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      return;
+    }
+    setBusy(true);
+    await onConfirm();
+  };
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.pwModalBackdrop} onPress={onClose}>
+        <Pressable style={styles.pwModalCard} onPress={() => undefined}>
+          <Text style={styles.pwModalTitle}>
+            {threatActive ? 'Clear campus threat?' : 'Declare campus threat?'}
+          </Text>
+          <Text style={styles.pwModalCopy}>
+            {threatActive
+              ? 'Clearing the threat stops live tracking on every student device. Enter the principal password to confirm.'
+              : 'Declaring a campus threat unlocks live GPS sharing on every student device and notifies guardians instantly. Enter the principal password to confirm.'}
+          </Text>
+          <TextInput
+            value={pw}
+            onChangeText={(t) => {
+              setPw(t);
+              setError(null);
+            }}
+            placeholder="Principal password"
+            placeholderTextColor="#71717a"
+            secureTextEntry
+            autoFocus
+            style={styles.pwInput}
+            onSubmitEditing={submit}
+          />
+          {error ? <Text style={styles.pwError}>{error}</Text> : null}
+          <View style={styles.pwActions}>
+            <Pressable onPress={onClose} style={styles.pwCancel}>
+              <Text style={styles.pwCancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable onPress={submit} disabled={busy} style={styles.pwConfirm}>
+              <Text style={styles.pwConfirmText}>
+                {busy ? '...' : threatActive ? 'Clear threat' : 'Declare threat'}
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -1710,14 +2103,19 @@ function Header({
   locationToken,
   profile,
   onSignOut,
-  notifPermitted,
+  onOpenSettings,
+  themeMode,
 }: {
   mode: Mode;
   locationToken: LocationToken;
   profile: Profile;
   onSignOut: () => void;
   notifPermitted?: boolean;
+  onOpenSettings?: () => void;
+  themeMode?: 'dark' | 'light';
 }) {
+  const palette = paletteFor(themeMode ?? 'dark');
+  const isLight = palette.mode === 'light';
   const identity =
     profile.role === 'student'
       ? profile.studentName
@@ -1734,26 +2132,59 @@ function Header({
   const tokenColor = locationToken === 'active' ? '#fb7185' : '#8ee7ff';
 
   return (
-    <View style={styles.header}>
+    <View
+      style={[
+        styles.header,
+        isLight && { backgroundColor: 'rgba(255,255,255,0.85)', borderBottomColor: palette.divider },
+      ]}
+    >
       <View style={styles.brandRow}>
-        <View style={styles.brandIcon}>
-          <Shield size={19} color="#f3f4f6" strokeWidth={2.4} />
+        <View
+          style={[
+            styles.brandIcon,
+            isLight && { borderColor: 'rgba(15,23,42,0.32)', backgroundColor: 'rgba(15,23,42,0.06)' },
+          ]}
+        >
+          <Shield size={19} color={isLight ? '#0f172a' : '#f3f4f6'} strokeWidth={2.4} />
         </View>
         <View style={{ flexShrink: 1 }}>
-          <Text style={styles.brandText}>BEACON5</Text>
-          <Text style={styles.brandSub} numberOfLines={1}>
+          <Text style={[styles.brandText, { color: palette.text }]}>BEACON5</Text>
+          <Text style={[styles.brandSub, { color: palette.textMuted }]} numberOfLines={1}>
             {identity}
           </Text>
-          <Text style={[styles.brandSub, { color: '#7d7d83' }]} numberOfLines={1}>
+          <Text style={[styles.brandSub, { color: palette.brandSub }]} numberOfLines={1}>
             {subtitle}
           </Text>
         </View>
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <Pressable onPress={onSignOut} style={({ pressed }) => [styles.signOutButton, pressed && styles.pressed]}>
-          <LogOut color="#cfc4c5" size={14} />
+        {onOpenSettings ? (
+          <Pressable
+            onPress={onOpenSettings}
+            style={({ pressed }) => [
+              styles.signOutButton,
+              isLight && { borderColor: 'rgba(15,23,42,0.24)', backgroundColor: 'rgba(15,23,42,0.04)' },
+              pressed && styles.pressed,
+            ]}
+            accessibilityLabel="Settings"
+          >
+            <SettingsIcon color={isLight ? '#0f172a' : '#cfc4c5'} size={16} />
+          </Pressable>
+        ) : null}
+        <Pressable
+          onPress={onSignOut}
+          style={({ pressed }) => [
+            styles.signOutButton,
+            isLight && { borderColor: 'rgba(15,23,42,0.24)', backgroundColor: 'rgba(15,23,42,0.04)' },
+            pressed && styles.pressed,
+          ]}
+        >
+          <LogOut color={isLight ? '#0f172a' : '#cfc4c5'} size={14} />
         </Pressable>
-        <LinearGradient colors={['#08313a', '#1f2937']} style={[styles.avatar, { borderColor: tokenColor }]}>
+        <LinearGradient
+          colors={isLight ? ['#bae6fd', '#e0f2fe'] : ['#08313a', '#1f2937']}
+          style={[styles.avatar, { borderColor: tokenColor }]}
+        >
           <Radio size={16} color={tokenColor} />
         </LinearGradient>
       </View>
@@ -1773,6 +2204,7 @@ function StudentMode({
   onActivate,
   onReset,
   onOpenEscalation,
+  themeMode,
 }: {
   profile: Extract<Profile, { role: 'student' }>;
   incident: Incident | null;
@@ -1783,6 +2215,7 @@ function StudentMode({
   onActivate: () => void;
   onReset: () => void;
   onOpenEscalation: (k: 'threat' | 'medical') => void;
+  themeMode?: 'dark' | 'light';
 }) {
   if (incident) {
     return (
@@ -1797,20 +2230,25 @@ function StudentMode({
       />
     );
   }
-  return <StudentDormant events={events} now={now} onActivate={onActivate} />;
+  return <StudentDormant events={events} now={now} onActivate={onActivate} themeMode={themeMode} />;
 }
 
 function StudentDormant({
   events,
   now,
   onActivate,
+  themeMode,
 }: {
   events: BeaconEvent[];
   now: number;
   onActivate: () => void;
+  themeMode?: 'dark' | 'light';
 }) {
   const [massCollapsed, setMassCollapsed] = useState(false);
   const broadcasts = massBroadcastsFor(events, 'student');
+  const threatActive = isCampusThreatActive(events);
+  const palette = paletteFor(themeMode ?? 'dark');
+  const isLight = palette.mode === 'light';
   return (
     <ScrollView
       contentContainerStyle={styles.studentDormantScroll}
@@ -1827,8 +2265,35 @@ function StudentDormant({
         </View>
       ) : null}
       <View style={styles.studentDormantCenter}>
-        <HoldToActivate onComplete={onActivate} />
-        <Text style={styles.holdHintTight}>Hold 1 second to alert staff & your guardian</Text>
+        {threatActive ? (
+          <>
+            <HoldToActivate onComplete={onActivate} />
+            <Text style={[styles.holdHintTight, { color: palette.textMuted }]}>
+              Hold 1 second to alert staff & your guardian
+            </Text>
+          </>
+        ) : (
+          <View
+            style={[
+              styles.calmCard,
+              isLight && {
+                backgroundColor: 'rgba(220,252,231,0.9)',
+                borderColor: 'rgba(34,197,94,0.55)',
+              },
+            ]}
+          >
+            <View
+              style={[styles.calmBadge, isLight && { backgroundColor: 'rgba(34,197,94,0.2)' }]}
+            >
+              <ShieldCheck color={isLight ? '#15803d' : '#86efac'} size={36} strokeWidth={2.2} />
+            </View>
+            <Text style={[styles.calmTitle, { color: palette.text }]}>You're safe.</Text>
+            <Text style={[styles.calmCopy, { color: palette.textMuted }]}>
+              Beacon5 is armed only when a teacher or the principal declares a campus threat. No
+              tracking, no alerts right now.
+            </Text>
+          </View>
+        )}
       </View>
     </ScrollView>
   );
@@ -2381,38 +2846,72 @@ function ChatPanel({
 function MassComposer({
   senderId,
   senderName,
+  events,
 }: {
   senderId: string;
   senderName: string;
+  events: BeaconEvent[];
 }) {
-  const [audience, setAudience] = useState<
-    'students' | 'parents' | 'teachers' | 'everyone'
-  >('everyone');
+  type AudienceKey = 'students' | 'parents' | 'teachers';
+  const [selected, setSelected] = useState<Set<AudienceKey>>(
+    () => new Set<AudienceKey>(['students', 'parents', 'teachers']),
+  );
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [polishing, setPolishing] = useState(false);
+
+  const togglePill = (key: AudienceKey) => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  };
+  const toggleEveryone = () => {
+    setSelected((cur) =>
+      cur.size === 3 ? new Set<AudienceKey>() : new Set<AudienceKey>(['students', 'parents', 'teachers']),
+    );
+    Haptics.selectionAsync().catch(() => undefined);
+  };
 
   const send = async () => {
-    if (!draft.trim() || sending) return;
+    if (!draft.trim() || sending || selected.size === 0) return;
     setSending(true);
+    setPolishing(true);
     Keyboard.dismiss();
     try {
-      await sendMassBroadcast(senderId, senderName, audience, draft);
+      const audienceLabel =
+        selected.size === 3 ? 'the whole campus' : Array.from(selected).join(' + ');
+      const polished = await polishMassBroadcast(
+        draft,
+        audienceLabel,
+        senderName,
+        events,
+      );
+      setPolishing(false);
+      if (selected.size === 3) {
+        await sendMassBroadcast(senderId, senderName, 'everyone', polished);
+      } else {
+        for (const aud of selected) {
+          await sendMassBroadcast(senderId, senderName, aud, polished);
+        }
+      }
       setDraft('');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     } finally {
       setSending(false);
+      setPolishing(false);
     }
   };
 
-  const audiences: Array<{
-    key: 'students' | 'parents' | 'teachers' | 'everyone';
-    label: string;
-  }> = [
+  const audiences: Array<{ key: AudienceKey; label: string }> = [
     { key: 'students', label: 'Students' },
     { key: 'parents', label: 'Parents' },
     { key: 'teachers', label: 'Teachers' },
-    { key: 'everyone', label: 'Everyone' },
   ];
+  const everyoneOn = selected.size === 3;
 
   return (
     <View style={styles.massComposer}>
@@ -2422,20 +2921,17 @@ function MassComposer({
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.massComposerTitle}>ADMIN MASS BROADCAST</Text>
-          <Text style={styles.massComposerSub}>Live to whoever you pick. Use sparingly.</Text>
+          <Text style={styles.massComposerSub}>Tap any combo. Use sparingly.</Text>
         </View>
       </View>
 
       <View style={styles.massAudienceRow}>
         {audiences.map((a) => {
-          const on = audience === a.key;
+          const on = selected.has(a.key);
           return (
             <Pressable
               key={a.key}
-              onPress={() => {
-                setAudience(a.key);
-                Haptics.selectionAsync().catch(() => undefined);
-              }}
+              onPress={() => togglePill(a.key)}
               style={({ pressed }) => [
                 styles.massAudienceChip,
                 on
@@ -2445,6 +2941,9 @@ function MassComposer({
               ]}
             >
               <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
                 style={[
                   styles.massAudienceText,
                   { color: on ? '#fde68a' : '#a1a1aa' },
@@ -2455,7 +2954,37 @@ function MassComposer({
             </Pressable>
           );
         })}
+        <Pressable
+          key="everyone"
+          onPress={toggleEveryone}
+          style={({ pressed }) => [
+            styles.massAudienceChip,
+            everyoneOn
+              ? { borderColor: '#fde047', backgroundColor: 'rgba(253,224,71,0.22)' }
+              : { borderColor: 'rgba(255,255,255,0.14)', backgroundColor: 'rgba(20,20,22,0.6)' },
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+            style={[
+              styles.massAudienceText,
+              { color: everyoneOn ? '#fef08a' : '#a1a1aa' },
+            ]}
+          >
+            Everyone
+          </Text>
+        </Pressable>
       </View>
+      <Text style={styles.massAudienceCount}>
+        {selected.size === 0
+          ? 'Pick at least one audience'
+          : selected.size === 3
+            ? 'Sending to everyone'
+            : `Sending to: ${Array.from(selected).join(' + ')}`}
+      </Text>
 
       <View style={styles.chatInputRow}>
         <TextInput
@@ -2469,15 +2998,18 @@ function MassComposer({
         />
         <Pressable
           onPress={send}
-          disabled={!draft.trim() || sending}
-          style={({ pressed }) => [
-            styles.chatSendButton,
-            { backgroundColor: '#fbbf24', opacity: draft.trim() && !sending ? 1 : 0.4 },
-            pressed && draft.trim() && !sending && styles.pressed,
-          ]}
+          disabled={!draft.trim() || sending || selected.size === 0}
+          style={({ pressed }) => {
+            const canSend = draft.trim() && !sending && selected.size > 0;
+            return [
+              styles.chatSendButton,
+              { backgroundColor: '#fbbf24', opacity: canSend ? 1 : 0.4 },
+              pressed && canSend && styles.pressed,
+            ];
+          }}
         >
           <Text style={[styles.chatSendText, { color: '#1f1300' }]}>
-            {sending ? '...' : 'Send'}
+            {polishing ? 'Polishing...' : sending ? '...' : 'Send'}
           </Text>
         </Pressable>
       </View>
@@ -2701,6 +3233,9 @@ function StaffMode({
   generatingBroadcast,
   onAllClear,
   onWipeEvents,
+  campusThreatActive,
+  onOpenThreatModal,
+  themeMode,
 }: {
   profile: Extract<Profile, { role: 'staff' }>;
   metrics: Record<StatusKey, number>;
@@ -2715,13 +3250,28 @@ function StaffMode({
   onMarkConfirmed: (zoneKey: string) => void;
   onAllClear: (incident: Extract<BeaconEvent, { type: 'BEACON_ACTIVATED' }>) => Promise<void>;
   onWipeEvents: () => void;
+  campusThreatActive: boolean;
+  onOpenThreatModal: () => void;
+  themeMode?: 'dark' | 'light';
 }) {
+  const palette = paletteFor(themeMode ?? 'dark');
+  const isLight = palette.mode === 'light';
   const top = activeIncidents[activeIncidents.length - 1] ?? null;
+  const orderedIncidents = activeIncidents.slice().reverse(); // newest first
   const [geminiText, setGeminiText] = useState<string | null>(null);
   const [threatsCollapsed, setThreatsCollapsed] = useState(false);
-  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [collapsedChats, setCollapsedChats] = useState<Set<string>>(new Set());
+  const [focusedStudentId, setFocusedStudentId] = useState<string | null>(null);
   const [massCollapsed, setMassCollapsed] = useState(true);
   const staffMassBroadcasts = massBroadcastsFor(events, 'staff');
+  const toggleChat = (sid: string) => {
+    setCollapsedChats((cur) => {
+      const next = new Set(cur);
+      if (next.has(sid)) next.delete(sid);
+      else next.add(sid);
+      return next;
+    });
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2763,24 +3313,74 @@ Output ONLY the brief sentence.`;
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"
     >
+      <Pressable
+        onPress={onOpenThreatModal}
+        style={({ pressed }) => [
+          styles.threatBigButton,
+          campusThreatActive && styles.threatBigButtonActive,
+          pressed && styles.pressed,
+        ]}
+      >
+        <AlertTriangle color="#fff" size={24} strokeWidth={3} />
+        <Text style={styles.threatBigButtonText}>
+          {campusThreatActive ? 'CLEAR THREAT' : 'THREAT'}
+        </Text>
+      </Pressable>
+      <Text style={[styles.threatHint, isLight && { color: '#475569' }]}>
+        {campusThreatActive
+          ? 'Live tracking is ON across every student device. Tap to clear.'
+          : 'System is armed only when threat is declared. Any staff can trigger.'}
+      </Text>
+
       {top ? (
-        <View style={styles.staffActiveCard}>
+        <View
+          style={[
+            styles.staffActiveCard,
+            isLight && { backgroundColor: 'rgba(254,226,226,0.85)', borderColor: 'rgba(239,68,68,0.55)' },
+          ]}
+        >
           <View style={styles.staffActiveAvatar}>
             <Siren color="#fecaca" size={20} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.staffActiveName}>{top.studentName}</Text>
-            <Text style={styles.staffActiveSub}>
+            <Text style={[styles.staffActiveName, isLight && { color: '#7f1d1d' }]}>{top.studentName}</Text>
+            <Text style={[styles.staffActiveSub, isLight && { color: '#991b1b' }]}>
               {top.zoneDescription ?? 'Beacon active - GPS pending'}
             </Text>
           </View>
         </View>
-      ) : (
-        <View style={styles.staffEmptyCard}>
-          <ShieldCheck color="#86efac" size={24} />
+      ) : campusThreatActive ? (
+        <View
+          style={[
+            styles.staffActiveCard,
+            isLight && { backgroundColor: 'rgba(254,243,199,0.85)', borderColor: 'rgba(251,191,36,0.55)' },
+          ]}
+        >
+          <View style={styles.staffActiveAvatar}>
+            <AlertTriangle color="#fde68a" size={20} />
+          </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.staffEmptyTitle}>Campus calm</Text>
-            <Text style={styles.staffEmptySub}>No active beacons. Cmdr {lastName} on watch.</Text>
+            <Text style={[styles.staffActiveName, isLight && { color: '#78350f' }]}>Campus threat live</Text>
+            <Text style={[styles.staffActiveSub, isLight && { color: '#92400e' }]}>
+              Waiting on student GPS check-ins. Map updates as devices report.
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <View
+          style={[
+            styles.staffEmptyCard,
+            isLight && { backgroundColor: 'rgba(220,252,231,0.85)', borderColor: 'rgba(34,197,94,0.55)' },
+          ]}
+        >
+          <ShieldCheck color={isLight ? '#15803d' : '#86efac'} size={24} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.staffEmptyTitle, isLight && { color: '#14532d' }]}>
+              Campus calm - system disarmed
+            </Text>
+            <Text style={[styles.staffEmptySub, isLight && { color: '#166534' }]}>
+              Beacons & tracking are paused. Cmdr {lastName} on watch.
+            </Text>
           </View>
         </View>
       )}
@@ -2788,20 +3388,18 @@ Output ONLY the brief sentence.`;
       <FleetMap
         beacons={buildFleetBeacons(events, activeIncidents)}
         height={280}
-        focusStudentId={top?.studentId ?? null}
+        focusStudentId={focusedStudentId ?? top?.studentId ?? null}
       />
-      {top ? (
-        <TrackingStats
-          path={pathForStudentIncident(events, top.studentId, top.id)}
-          startedAt={top.at}
-          now={now}
-        />
-      ) : null}
 
       {top ? (
-        <View style={styles.staffAiCard}>
-          <Text style={styles.staffAiLabel}>GEMINI BRIEF</Text>
-          <Text style={styles.staffAiText}>
+        <View
+          style={[
+            styles.staffAiCard,
+            isLight && { backgroundColor: 'rgba(224,242,254,0.9)', borderColor: 'rgba(14,165,233,0.55)' },
+          ]}
+        >
+          <Text style={[styles.staffAiLabel, isLight && { color: '#075985' }]}>GEMINI BRIEF</Text>
+          <Text style={[styles.staffAiText, isLight && { color: '#0c4a6e' }]}>
             {geminiText ??
               `${top.studentName} activated a beacon. Verify on-site before any broadcast.`}
           </Text>
@@ -2816,7 +3414,80 @@ Output ONLY the brief sentence.`;
         onToggle={() => setThreatsCollapsed((c) => !c)}
       />
 
-      <MassComposer senderId={profile.staffId} senderName={profile.staffName} />
+      {orderedIncidents.length > 0 ? (
+        <View style={styles.feedSection}>
+          <Text style={[styles.feedLabel, isLight && { color: '#475569' }]}>
+            ACTIVE BEACONS ({orderedIncidents.length})
+          </Text>
+          {orderedIncidents.map((inc) => {
+            const isFocused = focusedStudentId === inc.studentId;
+            const path = pathForStudentIncident(events, inc.studentId, inc.id);
+            const chatCollapsed = collapsedChats.has(inc.studentId);
+            return (
+              <View
+                key={inc.studentId}
+                style={[
+                  styles.studentSection,
+                  isLight && { backgroundColor: 'rgba(255,255,255,0.92)', borderColor: 'rgba(15,23,42,0.16)' },
+                  isFocused && styles.studentSectionFocused,
+                ]}
+              >
+                <Pressable
+                  onPress={() => setFocusedStudentId(isFocused ? null : inc.studentId)}
+                  style={[
+                    styles.studentSectionHeader,
+                    isLight && { borderBottomColor: 'rgba(15,23,42,0.08)' },
+                  ]}
+                >
+                  <View style={styles.studentSectionAvatar}>
+                    <Siren color="#fecaca" size={18} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.staffActiveName, isLight && { color: '#0f172a' }]}>{inc.studentName}</Text>
+                    <Text style={[styles.staffActiveSub, isLight && { color: '#475569' }]}>
+                      {inc.zoneDescription ?? 'GPS pending'} · {formatRelativeTime(inc.at, now)}
+                    </Text>
+                  </View>
+                  <Text style={[styles.chatHeaderToggle, { color: isFocused ? '#fb7185' : '#0ea5e9' }]}>
+                    {isFocused ? 'FOCUS' : 'TAP'}
+                  </Text>
+                </Pressable>
+                <View style={styles.studentSectionBody}>
+                  <TrackingStats path={path} startedAt={inc.at} now={now} />
+                  <Pressable
+                    onPress={() => onAllClear(inc)}
+                    disabled={generatingBroadcast}
+                    style={({ pressed }) => [
+                      styles.allClearButton,
+                      generatingBroadcast && styles.allClearDisabled,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <ShieldCheck color="#03210d" size={20} />
+                    <Text style={styles.allClearText}>
+                      {generatingBroadcast
+                        ? 'Generating...'
+                        : `ALL CLEAR — ${inc.studentName.split(' ')[0]}`}
+                    </Text>
+                  </Pressable>
+                  <ChatPanel
+                    messages={messagesForStudent(events, inc.studentId)}
+                    meSender="staff"
+                    meName={profile.staffName}
+                    studentId={inc.studentId}
+                    peerLabel={`Message ${inc.studentName.split(' ')[0]}'s guardian`}
+                    now={now}
+                    collapsed={chatCollapsed}
+                    onToggle={() => toggleChat(inc.studentId)}
+                  />
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
+      <MassComposer senderId={profile.staffId} senderName={profile.staffName} events={events} />
 
       <MassBroadcastList
         broadcasts={staffMassBroadcasts}
@@ -2824,42 +3495,6 @@ Output ONLY the brief sentence.`;
         collapsed={massCollapsed}
         onToggle={() => setMassCollapsed((c) => !c)}
       />
-
-      {top ? (
-        <Pressable
-          onPress={() => onAllClear(top)}
-          disabled={generatingBroadcast}
-          style={({ pressed }) => [
-            styles.allClearButton,
-            generatingBroadcast && styles.allClearDisabled,
-            pressed && styles.pressed,
-          ]}
-        >
-          <ShieldCheck color="#03210d" size={22} />
-          <Text style={styles.allClearText}>
-            {generatingBroadcast ? 'Generating broadcast...' : 'ALL CLEAR'}
-          </Text>
-        </Pressable>
-      ) : null}
-
-      {top ? (
-        <ChatPanel
-          messages={messagesForStudent(events, top.studentId)}
-          meSender="staff"
-          meName={profile.staffName}
-          studentId={top.studentId}
-          peerLabel={`Message ${top.studentName.split(' ')[0]}'s guardian`}
-          now={now}
-          collapsed={chatCollapsed}
-          onToggle={() => setChatCollapsed((c) => !c)}
-        />
-      ) : null}
-
-      {top && broadcastsForTop > 0 ? (
-        <Text style={styles.miniMapEmptyText}>
-          {broadcastsForTop} broadcast{broadcastsForTop > 1 ? 's' : ''} sent for this incident.
-        </Text>
-      ) : null}
 
       <Pressable onPress={onWipeEvents} style={({ pressed }) => [styles.wipeButton, pressed && styles.pressed]}>
         <RefreshCcw color="#a1a1aa" size={12} />
@@ -2922,6 +3557,7 @@ function ParentMode({
   events,
   activeIncidents,
   now,
+  themeMode,
 }: {
   profile: Extract<Profile, { role: 'parent' }>;
   verifications: Map<string, VerificationState>;
@@ -2930,9 +3566,12 @@ function ParentMode({
   broadcast: Extract<BeaconEvent, { type: 'STAFF_BROADCAST' }> | null;
   events: BeaconEvent[];
   activeIncidents: Array<Extract<BeaconEvent, { type: 'BEACON_ACTIVATED' }>>;
+  themeMode?: 'dark' | 'light';
 }) {
   const first = profile.linkedStudentName.split(' ')[0];
   const isAlert = Boolean(activeIncident);
+  const palette = paletteFor(themeMode ?? 'dark');
+  const isLight = palette.mode === 'light';
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [threatsCollapsed, setThreatsCollapsed] = useState(true);
   const [massCollapsed, setMassCollapsed] = useState(false);
@@ -2977,8 +3616,12 @@ function ParentMode({
         style={[
           styles.parentBigCard,
           isAlert
-            ? { borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)' }
-            : { borderColor: 'rgba(34,197,94,0.4)', backgroundColor: 'rgba(34,197,94,0.08)' },
+            ? isLight
+              ? { borderColor: '#ef4444', backgroundColor: 'rgba(254,226,226,0.95)' }
+              : { borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)' }
+            : isLight
+              ? { borderColor: 'rgba(34,197,94,0.55)', backgroundColor: 'rgba(220,252,231,0.92)' }
+              : { borderColor: 'rgba(34,197,94,0.4)', backgroundColor: 'rgba(34,197,94,0.08)' },
         ]}
       >
         <View
@@ -2990,13 +3633,23 @@ function ParentMode({
           {isAlert ? (
             <Siren color="#ef4444" size={28} />
           ) : (
-            <ShieldCheck color="#22c55e" size={28} />
+            <ShieldCheck color={isLight ? '#15803d' : '#22c55e'} size={28} />
           )}
         </View>
-        <Text style={styles.parentBigTitle}>
+        <Text
+          style={[
+            styles.parentBigTitle,
+            isLight && { color: isAlert ? '#7f1d1d' : '#14532d' },
+          ]}
+        >
           {isAlert ? `${first} activated the beacon` : `${first} is safe`}
         </Text>
-        <Text style={styles.parentBigSub}>
+        <Text
+          style={[
+            styles.parentBigSub,
+            isLight && { color: isAlert ? '#991b1b' : '#166534' },
+          ]}
+        >
           {isAlert
             ? `Signal received ${formatRelativeTime(activeIncident!.at, now)}. Staff have ${first}'s live GPS.`
             : 'No active signal. Beacon5 is not tracking during normal school hours.'}
@@ -3684,6 +4337,201 @@ function buildAISummary(
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#000000' },
   root: { flex: 1, backgroundColor: '#000000' },
+  lightSafeArea: { backgroundColor: '#f5f5f7' },
+  lightCardBg: {
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderColor: 'rgba(15,23,42,0.14)',
+  },
+  lightHeaderBg: {
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderBottomColor: 'rgba(15,23,42,0.12)',
+  },
+  lightText: { color: '#0f172a' },
+  lightTextMuted: { color: '#475569' },
+  lightTextDim: { color: '#64748b' },
+  campusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(251,191,36,0.5)',
+    backgroundColor: 'rgba(244, 63, 94, 0.85)',
+  },
+  campusBannerText: { color: '#fff', fontSize: 12, fontWeight: '900', letterSpacing: 0.5, flex: 1 },
+  campusBannerBy: { color: 'rgba(255,255,255,0.85)', fontSize: 10, fontWeight: '700' },
+  threatBigButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    height: 68,
+    borderRadius: 16,
+    backgroundColor: '#ef4444',
+    shadowColor: '#ef4444',
+    shadowOpacity: 0.6,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  threatBigButtonText: { color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: 2 },
+  threatBigButtonActive: {
+    backgroundColor: '#dc2626',
+    borderWidth: 2,
+    borderColor: '#fbbf24',
+    shadowColor: '#fbbf24',
+    shadowOpacity: 0.7,
+    shadowRadius: 22,
+  },
+  threatHint: {
+    color: '#a1a1aa',
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginTop: -6,
+  },
+  studentSection: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(76, 69, 70, 0.5)',
+    backgroundColor: 'rgba(12, 12, 13, 0.72)',
+    overflow: 'hidden',
+    marginBottom: 4,
+    shadowColor: '#ef4444',
+    shadowOpacity: 0.15,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  studentSectionFocused: {
+    borderColor: '#fb7185',
+    shadowOpacity: 0.5,
+  },
+  studentSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  studentSectionAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(239,68,68,0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  studentSectionBody: {
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    paddingTop: 10,
+    gap: 10,
+  },
+  calmCard: {
+    alignItems: 'center',
+    gap: 14,
+    padding: 28,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.4)',
+    backgroundColor: 'rgba(34,197,94,0.08)',
+    maxWidth: 340,
+  },
+  calmBadge: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: 'rgba(34,197,94,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#22c55e',
+    shadowOpacity: 0.5,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  calmTitle: { color: '#f4f4f5', fontSize: 24, fontWeight: '900' },
+  calmCopy: {
+    color: '#d4d4d8',
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+  pwModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  pwModalCard: {
+    borderRadius: 20,
+    padding: 20,
+    gap: 12,
+    backgroundColor: 'rgba(20,20,22,0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.55)',
+  },
+  pwModalTitle: { color: '#fecaca', fontSize: 18, fontWeight: '900' },
+  pwModalCopy: { color: '#d4d4d8', fontSize: 13, lineHeight: 19 },
+  pwInput: {
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.5)',
+    paddingHorizontal: 14,
+    color: '#f4f4f5',
+    fontSize: 15,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  pwError: { color: '#fca5a5', fontSize: 12, fontWeight: '700' },
+  pwActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  pwCancel: {
+    flex: 1,
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pwCancelText: { color: '#f4f4f5', fontWeight: '700' },
+  pwConfirm: {
+    flex: 1.4,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pwConfirmText: { color: '#fff', fontWeight: '900', letterSpacing: 0.4 },
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(20,20,22,0.6)',
+  },
+  settingsRowLabel: { color: '#f4f4f5', fontSize: 15, fontWeight: '800', flex: 1 },
+  themeChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginLeft: 6,
+  },
+  themeChipActive: { borderColor: '#7dd3fc', backgroundColor: 'rgba(125,211,252,0.18)' },
+  themeChipInactive: { borderColor: 'rgba(255,255,255,0.12)' },
+  themeChipText: { fontSize: 11, fontWeight: '900', letterSpacing: 0.5 },
   header: {
     minHeight: 78,
     paddingVertical: 10,
@@ -4692,7 +5540,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
   },
-  massAudienceText: { fontSize: 12, fontWeight: '800' },
+  massAudienceText: { fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  massAudienceCount: {
+    color: '#a1a1aa',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
   massListPanel: {
     borderRadius: 12,
     borderWidth: 1,
