@@ -25,6 +25,9 @@ interface AuthContextValue {
   user: SupaUser | null;
   beacon: BeaconSession | null;
   refresh: () => Promise<void>;
+  demoMode: boolean;
+  enterDemo: () => void;
+  exitDemo: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -65,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
   const [beacon, setBeacon] = useState<BeaconSession | null>(null);
+  const [demoMode, setDemoMode] = useState(false);
 
   async function applySession(s: Session | null): Promise<void> {
     setSession(s);
@@ -112,8 +116,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         const { data } = await supabase.auth.getSession();
         await applySession(data.session);
       },
+      demoMode,
+      enterDemo: () => setDemoMode(true),
+      exitDemo: () => setDemoMode(false),
     }),
-    [loading, session, beacon],
+    [loading, session, beacon, demoMode],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

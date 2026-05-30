@@ -93,12 +93,40 @@ async function signInWithOAuth(provider: 'google' | 'apple'): Promise<void> {
     throw new SignInError('OAUTH_FAILED', `OAuth result: ${result.type}`);
   }
 
-  // Parse code+state out of the redirect URL and complete the exchange.
+  // Parse both ?query and #fragment — Supabase's PKCE flow uses query (?code=),
+  // implicit flow uses fragment (#access_token=). Handle either.
   const url = new URL(result.url);
-  const code = url.searchParams.get('code');
-  if (!code) throw new SignInError('OAUTH_NO_CODE', 'no authorization code in redirect');
-  const { error: exchErr } = await supabase.auth.exchangeCodeForSession(code);
-  if (exchErr) throw new SignInError('OAUTH_EXCHANGE', exchErr.message);
+  const queryParams = url.searchParams;
+  const fragmentParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+  const code = queryParams.get('code') ?? fragmentParams.get('code');
+  const accessToken = queryParams.get('access_token') ?? fragmentParams.get('access_token');
+  const refreshToken = queryParams.get('refresh_token') ?? fragmentParams.get('refresh_token');
+  const errParam = queryParams.get('error') ?? fragmentParams.get('error');
+  const errDesc = queryParams.get('error_description') ?? fragmentParams.get('error_description');
+
+  if (errParam) {
+    throw new SignInError('OAUTH_PROVIDER_ERROR', `${errParam}: ${errDesc ?? 'no description'}`);
+  }
+
+  if (code) {
+    const { error: exchErr } = await supabase.auth.exchangeCodeForSession(code);
+    if (exchErr) throw new SignInError('OAUTH_EXCHANGE', exchErr.message);
+    return;
+  }
+
+  if (accessToken && refreshToken) {
+    const { error: setErr } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (setErr) throw new SignInError('OAUTH_SET_SESSION', setErr.message);
+    return;
+  }
+
+  throw new SignInError(
+    'OAUTH_NO_CODE',
+    `no code or access_token in redirect. URL was: ${result.url.slice(0, 200)}`,
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────
