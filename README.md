@@ -24,10 +24,11 @@ Real-time campus & facility safety platform. **You are on the `v2` (production r
 ```
 beacon5/
 ├── PRD / PLAN / KEYS / DECISIONS / TODO / DESIGN (docs)
-├── app/         — Expo + RN + TS mobile app (v1 monolith lives here for now)
+├── app/         — Expo + RN + TS mobile app (v1 monolith + new v2 auth/sign-in)
 ├── admin/       — Vite + React + TS web admin console (Phase 0 step 11)
-├── server/      — Node + TS backend (Cloud Functions; AI proxy + RBAC + push)
-└── shared/      — Cross-package types, env schemas, AI prompt templates
+├── server/      — Node + TS backend (Express; AI proxy + RBAC + push + Supabase Admin)
+├── shared/      — Cross-package types + auth contracts + AI prompt templates
+└── supabase/    — SQL migrations (Postgres schema + RLS policies)
 ```
 
 The v1 6000-line `App.tsx` is moved to `app/App.tsx` on this branch and will be split into `app/src/{auth,incident,location,comms,maps,ai,ui,domain}/` during Phase 0 step 7. Until then it runs unchanged via `cd app && npx expo start --tunnel`.

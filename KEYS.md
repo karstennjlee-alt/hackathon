@@ -22,24 +22,35 @@ This guide is the authoritative answer to "where does this key come from and whi
 
 Each row = one var. Columns: **what it is**, **var name**, **where to get it**, **server vs client**, **how to restrict**.
 
-### 1. Firebase (used for: realtime, auth claims via admin SDK, push via FCM)
+### 1. Supabase (used for: Postgres + RLS, auth, Realtime, Storage)
 
-You need **three separate Firebase projects**: `beacon5-dev`, `beacon5-staging`, `beacon5-prod`. Each yields one set of values. The `.env` files below are for dev; copy-paste the pattern for staging/prod into your CI/CD secret store.
+> **v2 swapped Firebase → Supabase.** Postgres replaces Firestore + RTDB, Row Level Security replaces Firestore rules, Supabase Auth replaces Firebase Auth. v1 still uses Firebase on `main`; see appendix at the bottom for the deprecated Firebase keys.
+
+You need **three separate Supabase projects** in production: `beacon5-dev`, `beacon5-staging`, `beacon5-prod`. Each gives you the values below.
 
 | # | Var | Side | Where to get it | Restrict by |
 |---|---|---|---|---|
-| 1.1 | `FIREBASE_PROJECT_ID` | server | Firebase console → ⚙ Project settings → General → Project ID | n/a (identifier) |
-| 1.2 | `FIREBASE_SERVICE_ACCOUNT_PATH` *(file path)* or `FIREBASE_SERVICE_ACCOUNT_JSON` *(inline JSON, base64-OK)* | **server only** | Firebase console → ⚙ Project settings → Service accounts → "Generate new private key" → downloads a JSON file. Save to `server/secrets/firebase-service-account.json` (gitignored). | IAM role on the service account — give it only `Firebase Admin SDK Administrator Service Agent` for dev; tighten in prod. |
-| 1.3 | `EXPO_PUBLIC_FIREBASE_API_KEY` | **client-safe** | Firebase console → ⚙ Project settings → General → "Your apps" → register an iOS + an Android app → SDK setup → web config object | Google Cloud console → APIs & Services → Credentials → click the key → "Application restrictions" → restrict by **iOS bundle ID** + **Android package + SHA-1**. |
-| 1.4 | `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` | client-safe | same web config | n/a (domain) |
-| 1.5 | `EXPO_PUBLIC_FIREBASE_PROJECT_ID` | client-safe | same | n/a |
-| 1.6 | `EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET` | client-safe | same | Firebase Storage rules (R8.3.2 — scope by `campusId`) |
-| 1.7 | `EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | client-safe | same | n/a |
-| 1.8 | `EXPO_PUBLIC_FIREBASE_APP_ID` | client-safe | same | n/a |
-| 1.9 | `EXPO_PUBLIC_FIREBASE_DATABASE_URL` | client-safe | same; RTDB only — `https://<project>-default-rtdb.firebaseio.com` | RTDB security rules (Phase 0 step 1) |
-| 1.10 | `VITE_FIREBASE_*` (admin console) | client-safe | Same web config, but for a separate web app in the same Firebase project. Register a **web** app under the same project. | HTTP referer restriction → your admin domain. |
+| 1.1 | `SUPABASE_URL` (server) / `EXPO_PUBLIC_SUPABASE_URL` (app) / `VITE_SUPABASE_URL` (admin) | URL is **safe everywhere** | Supabase dashboard → ⚙ Project Settings → Data API → Project URL (e.g. `https://sapqeqeaelqujgwruues.supabase.co`) | n/a — it's just an identifier |
+| 1.2 | `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (app) / `VITE_SUPABASE_PUBLISHABLE_KEY` (admin) | **client-safe** — prefixed `sb_publishable_*`, designed to be public | Supabase dashboard → ⚙ Project Settings → API Keys → Publishable key | Row Level Security policies on every table (Phase 0 step 1 migration) |
+| 1.3 | `SUPABASE_SERVICE_ROLE_KEY` | **server only** — prefixed `sb_secret_*` (also displayed as the "service_role" JWT). **Bypasses ALL RLS.** | Supabase dashboard → ⚙ Project Settings → API Keys → "service_role" (click "Reveal") | Server-side only; KMS in prod. If it ever leaks anywhere a client can read, **rotate immediately**. |
+| 1.4 | `SUPABASE_JWT_SECRET` | **server only** | Supabase dashboard → ⚙ Project Settings → JWT Settings → "JWT Secret" → "Reveal" | Used to verify user JWTs server-side. Rotating it logs everyone out. |
+| 1.5 | `SUPABASE_DB_URL` | **server only** | Supabase dashboard → ⚙ Project Settings → Database → Connection string → URI → "Use connection pooling" (port 6543) | Restrict the Postgres role; rotate the password if leaked. |
 
-> ⚠️ The v1 `.env` shipped these `EXPO_PUBLIC_FIREBASE_*` keys directly in the JS bundle. That is **acceptable** for Firebase web keys *only if* they are restricted by bundle/SHA-1/referer in Google Cloud console. An unrestricted key is a quota-drain incident waiting to happen. **Restrict every key before launch.**
+> ⚠️ **The `sb_publishable_*` key is meant to be public** — like a Firebase web API key, it ships in the bundle. Row Level Security is what protects your data. **The `service_role` key is the opposite** — it's the master key, bypasses RLS, and must never be in client code, admin console, the mobile bundle, or git history.
+
+#### Auth providers (configured in Supabase dashboard, not env vars)
+
+Supabase Auth lets you flip on Apple, Google, email-link / email+password from the dashboard. The keys go **in the dashboard**, not in `.env`:
+
+| Provider | Where to enable | What you paste in |
+|---|---|---|
+| Email (magic link / password) | Authentication → Providers → Email | Just toggle on. Customize templates optionally. |
+| Sign in with Apple | Authentication → Providers → Apple | Apple Services ID (§4.2), Team ID (§4.1), Key ID (§4.3), `.p8` content (§4.4). Supabase becomes the relying party. |
+| Google | Authentication → Providers → Google | Google OAuth Web Client ID + Secret (§5.3). Add `https://<project>.supabase.co/auth/v1/callback` to authorized redirect URIs in Google Cloud. |
+
+You don't need separate iOS/Android Google client IDs when Supabase is the OAuth broker — the web client ID handles all platforms via Supabase's redirect.
+
+> ℹ️ The v1 `EXPO_PUBLIC_FIREBASE_*` keys are still in `app/.env` because the v1 monolith on `main` reads them at runtime. They're no longer required by the v2 env validator. v2 only needs the `EXPO_PUBLIC_SUPABASE_*` values.
 
 ### 2. Gemini (AI hot path — alert clarification, briefs, broadcasts)
 
@@ -90,13 +101,17 @@ You need separate client IDs for each platform.
 
 > Critical Alerts entitlement is requested separately from Apple after you have an app in TestFlight — see DECISIONS.md.
 
-### 7. FCM (Firebase Cloud Messaging — Android push)
+### 7. FCM (Firebase Cloud Messaging — Android push) — standalone now (was bundled with Firebase)
+
+Since v2 dropped Firebase, FCM is now standalone. Create a Firebase project **only for FCM**.
 
 | # | Var | Side | Where to get it | Restrict by |
 |---|---|---|---|---|
-| 7.1 | (none — reuses 1.2) | **server only** | The Firebase Admin SDK service account JSON from 1.2 already handles FCM. No separate key needed. | IAM role on the service account. |
+| 7.1 | `FCM_SERVICE_ACCOUNT_PATH` *(file path)* or `FCM_SERVICE_ACCOUNT_JSON` | **server only** | Create a Firebase project (`beacon5-push-dev`), enable Cloud Messaging, then ⚙ Project settings → Service accounts → "Generate new private key". Save to `server/secrets/fcm-service-account.json` (gitignored). | IAM role on the service account. |
 
-The Android app itself needs a `google-services.json` from the Firebase console → register Android app → download. Place at `app/google-services.json` (gitignored). Not strictly an env var; it's a build-time config file.
+The Android app itself needs a `google-services.json` from that Firebase project → register Android app → download. Place at `app/google-services.json` (gitignored). Not an env var; it's a build-time config file.
+
+Alternative: skip FCM, use Expo Push (§8) and let Expo's infrastructure handle FCM under the hood. Recommended for now.
 
 ### 8. Expo Push (optional alternative to direct APNs/FCM)
 
@@ -139,14 +154,15 @@ For dev, leave both blank. The env validator only requires them when `NODE_ENV=p
 
 Do this once, before anyone codes:
 
-1. **Apple Developer Program** ($99/yr). Without this, no iOS App Store, no APNs, no Sign in with Apple. Do this first because Apple's review takes 24–48h.
-2. **Google Cloud + Firebase dev project.** Create `beacon5-dev` in Firebase console (which auto-creates the GCP project). Enable billing on the GCP project (free tier covers dev).
-3. **Provision Firebase web config + service account** (rows 1.1–1.9 + 1.10 for admin).
+1. **Supabase project** — create at supabase.com → grab URL + publishable + service_role + JWT secret + DB URI (§1).
+2. **Run the SQL migration** — Supabase dashboard → SQL editor → paste `supabase/migrations/001_init.sql` → run. Creates all tables + RLS policies.
+3. **Enable auth providers** in the Supabase dashboard (Authentication → Providers): Email + Google + Apple. Steps 4–5 supply the credentials Google + Apple need.
 4. **Rotate the v1 Gemini key**, create a new one for `server/.env`, restrict it to Generative Language API.
-5. **Google OAuth + Sign in with Apple** identifiers (you'll need them before you can register users).
-6. **APNs key + FCM service account** (push setup).
+5. **Apple Developer Program** ($99/yr) — needed for Apple Sign-In credentials (§4) + APNs (§6) + App Store. Review takes 24–48h, so start early.
+6. **Google OAuth Web Client** (§5.3) for Supabase to broker Google Sign-In.
 7. **Sentry** (3 projects — server, app, admin).
 8. **Google Maps Android key** (only when you're ready to build the Android map view).
+9. **APNs key + FCM service account** (later — push setup, step 6 of the plan).
 
 Staging + prod projects can wait until the first pilot deployment.
 
@@ -166,7 +182,7 @@ Staging + prod projects can wait until the first pilot deployment.
 
 The boot-time validator throws errors that reference these section anchors. When you see an error like `Missing GEMINI_API_KEY — see KEYS.md §2`, jump to section 2 above.
 
-- §1 — Firebase
+- §1 — Supabase
 - §2 — Gemini
 - §3 — Geocoding
 - §4 — Sign in with Apple

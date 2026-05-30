@@ -1,50 +1,67 @@
-// Helpers for reading + writing custom claims on Firebase auth tokens.
-// Custom claims are the contract that Firestore + RTDB security rules read.
-// See server/firestore-rules/README.md for the contract.
+// Read + write of Beacon5 custom claims on Supabase auth users.
+// Claims live in auth.users.raw_app_meta_data; updated via Admin SDK.
+// Schema:  { campus_id: string, role: Role, provider?: string }
 
-import { auth, db } from '../firebase';
-import type { User } from '@beacon5/shared';
+import { admin } from '../supabase';
+import type { Role } from '@beacon5/shared';
 
 export interface UserClaims {
   campusId: string;
-  role: User['role'];
-  linkedStudents?: string[];
+  role: Role;
 }
 
+// Merges the Beacon5 keys into existing app_metadata (preserving provider/providers).
 export async function setSessionClaims(uid: string, claims: UserClaims): Promise<void> {
-  await auth.setCustomUserClaims(uid, {
-    campusId: claims.campusId,
+  const { data, error: getErr } = await admin.auth.admin.getUserById(uid);
+  if (getErr) throw new Error(`getUserById(${uid}): ${getErr.message}`);
+  const current = (data.user?.app_metadata ?? {}) as Record<string, unknown>;
+  const next = {
+    ...current,
+    campus_id: claims.campusId,
     role: claims.role,
-    ...(claims.linkedStudents ? { linkedStudents: claims.linkedStudents } : {}),
-  });
+  };
+  const { error } = await admin.auth.admin.updateUserById(uid, { app_metadata: next });
+  if (error) throw new Error(`updateUserById(${uid}): ${error.message}`);
 }
 
-export async function loadUserRecord(campusId: string, uid: string): Promise<User | null> {
-  const snap = await db.collection('campuses').doc(campusId).collection('users').doc(uid).get();
-  if (!snap.exists) return null;
-  return snap.data() as User;
+// Find the (at most one) campus + user record for an auth uid.
+export async function findUserByUid(
+  uid: string,
+): Promise<{ campusId: string; user: UserRow } | null> {
+  const { data, error } = await admin
+    .from('users')
+    .select('id, campus_id, role, display_name, is_minor, auth_provider, created_at')
+    .eq('id', uid)
+    .maybeSingle();
+  if (error) throw new Error(`findUserByUid: ${error.message}`);
+  if (!data) return null;
+  return {
+    campusId: data.campus_id as string,
+    user: data as UserRow,
+  };
 }
 
-// Finds the User across all campuses (used at /v1/auth/session when the client
-// doesn't yet know which campus they're scoped to). One-campus-per-user is
-// enforced by R8.1.2, so at most one match exists.
-export async function findUserByUid(uid: string): Promise<{ campusId: string; user: User } | null> {
-  const q = await db.collectionGroup('users').where('id', '==', uid).limit(1).get();
-  if (q.empty) return null;
-  const doc = q.docs[0]!;
-  // path: campuses/{campusId}/users/{uid}
-  const parts = doc.ref.path.split('/');
-  const campusId = parts[1]!;
-  return { campusId, user: doc.data() as User };
+export async function linkedStudentIds(
+  campusId: string,
+  guardianUid: string,
+): Promise<string[]> {
+  const { data, error } = await admin
+    .from('guardian_links')
+    .select('student_user_id')
+    .eq('campus_id', campusId)
+    .eq('guardian_user_id', guardianUid)
+    .eq('verified', true);
+  if (error) throw new Error(`linkedStudentIds: ${error.message}`);
+  return (data ?? []).map((r) => r.student_user_id as string);
 }
 
-export async function linkedStudentIds(campusId: string, guardianUid: string): Promise<string[]> {
-  const q = await db
-    .collection('campuses')
-    .doc(campusId)
-    .collection('guardianLinks')
-    .where('guardianUserId', '==', guardianUid)
-    .where('verified', '==', true)
-    .get();
-  return q.docs.map((d) => (d.data() as { studentUserId: string }).studentUserId);
+// Public users table row shape (snake_case as stored).
+export interface UserRow {
+  id: string;
+  campus_id: string;
+  role: Role;
+  display_name: string;
+  is_minor: boolean;
+  auth_provider: string | null;
+  created_at: string;
 }
