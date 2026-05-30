@@ -12,9 +12,9 @@ Last refreshed: end of scaffolding session.
 
 | # | Gap | Status | Notes |
 |---|---|---|---|
-| G1 | No real authentication | ⬜ | Replaced by R8.1 — Phase 0 step 2 |
+| G1 | No real authentication | 🟡 | Server auth scaffolded — `/v1/auth/{session,join,bootstrap,join-codes}` with custom claims. App client integration is next session. |
 | G2 | Secrets in client bundle | ⬜ | Replaced by AI proxy + KMS — Phase 0 step 5 |
-| G3 | Hard-coded `'cwb'` password | ⬜ | Replaced by RBAC + step-up — Phase 0 step 3 |
+| G3 | Hard-coded `'cwb'` password | 🟡 | RBAC matrix + `requirePermission` + step-up (auth_time ≤ 5 min) shipped server-side; gates apply once incident/threat routes land in step 4. |
 | G4 | Global event log | 🟡 | Rules written (not deployed) — `server/firestore-rules/`. Deploy when step 2 (auth) lands. |
 | G5 | Hard-coded campus/zones/roster | ⬜ | Replaced by config-driven UI + admin console — steps 7 + 11 |
 | G6 | No privacy/compliance controls | ⬜ | Compliance program — step 12 |
@@ -29,22 +29,22 @@ Last refreshed: end of scaffolding session.
 
 | Req | Status | Note |
 |---|---|---|
-| R8.1.1 — email/OTP + Apple + Google | ⬜ | Sign in with Apple mandatory on iOS |
-| R8.1.2 — bound to one verified org + role; never self-selected | ⬜ | |
-| R8.1.3 — invitation/verification-gated join | ⬜ | join code + domain + roster paths |
-| R8.1.4 — verified guardian linking | ⬜ | |
-| R8.1.5 — `expo-secure-store` tokens, refresh, server revocation | ⬜ | |
-| R8.1.6 — recovery cannot hijack role-bearing identity | ⬜ | admin-mediated for staff/admin |
-| R8.1.7 — minor handling + FERPA school-official path | ⬜ | per [DECISIONS.md D2](DECISIONS.md): school-provisioned default |
+| R8.1.1 — email/OTP + Apple + Google | 🟡 | Server accepts any Firebase Auth provider; need Firebase console toggle. Email-link works zero-config; Apple/Google need keys per KEYS.md §4 §5. |
+| R8.1.2 — bound to one verified org + role; never self-selected | 🟡 | Enforced server-side in `join` + `bootstrap`: collectionGroup check before insert; role comes from code, not request body. |
+| R8.1.3 — invitation/verification-gated join | 🟡 | Join codes shipped (`/v1/auth/join-codes` + `/v1/auth/join`); domain-verified email + roster import are P1. |
+| R8.1.4 — verified guardian linking | ⬜ | Contract drafted in `shared/src/auth/`; endpoint lands next session. |
+| R8.1.5 — `expo-secure-store` tokens, refresh, server revocation | ⬜ | App-side, next session. Server revocation works today (Firebase `revokeRefreshTokens`). |
+| R8.1.6 — recovery cannot hijack role-bearing identity | ⬜ | Future. Today: deletion + re-bootstrap is admin-only. |
+| R8.1.7 — minor handling + FERPA school-official path | 🟡 | `isMinor` flag set true for students in `joinCode.ts`; full FERPA pathway via admin console (step 11). |
 | R8.1.8 — admin MFA / SIS import / SSO | 🚫 | P1/P2 |
 
 ## §8.2 RBAC
 
 | Req | Status | Note |
 |---|---|---|
-| R8.2.1 — server-enforced permissions | ⬜ | |
-| R8.2.2 — baseline permission matrix | ⬜ | encoded in `server/src/rbac/` |
-| R8.2.3 — step-up auth for declare/clear/everyone broadcast | ⬜ | replaces `'cwb'` |
+| R8.2.1 — server-enforced permissions | 🟡 | `requireCampusMember` + `requirePermission(perm)` middleware shipped; routes adopt them in step 4. |
+| R8.2.2 — baseline permission matrix | 🟢 | Encoded in [`server/src/rbac/permissions.ts`](server/src/rbac/permissions.ts). |
+| R8.2.3 — step-up auth for declare/clear/everyone broadcast | 🟡 | `requirePermission` checks `auth_time` ≤ 5 min for STEP_UP_PERMISSIONS; client re-auth flow lands in step 4. |
 | R8.2.4 — who-can-declare-threat is org-configurable | ⬜ | per [DECISIONS.md D4](DECISIONS.md): default `any-staff` |
 
 ## §8.3 Multi-tenancy
@@ -149,7 +149,7 @@ Last refreshed: end of scaffolding session.
 | Split `App.tsx` into modules | ⬜ | step 7 — future session |
 | Tokens in `expo-secure-store`, not AsyncStorage | ⬜ | step 2 |
 | Config-driven UI (campus/zones/branding/roster/policy from backend) | ⬜ | step 7 |
-| Authoritative backend mediates every write | ⬜ | step 4 |
+| Authoritative backend mediates every write | 🟡 | Server foundation up (express + Firebase Admin SDK); auth routes live, incident/threat/messages routes in step 4. |
 | Firestore + RTDB scoped by `campusId` with security rules | 🟡 | step 1 — rules + indexes + storage rules written in `server/firestore-rules/`; deploy gated on auth |
 | AI proxy with KMS keys + provider-agnostic interface + fallback chain | ⬜ | step 5 |
 | Server push dispatcher (APNs/FCM via Expo Push or direct) | ⬜ | step 6 |
