@@ -15,7 +15,7 @@ Last refreshed: end of scaffolding session.
 | G1 | No real authentication | 🟡 | Server auth scaffolded — `/v1/auth/{session,join,bootstrap,join-codes}` with custom claims. App client integration is next session. |
 | G2 | Secrets in client bundle | ⬜ | Replaced by AI proxy + KMS — Phase 0 step 5 |
 | G3 | Hard-coded `'cwb'` password | 🟡 | RBAC matrix + `requirePermission` + step-up (auth_time ≤ 5 min) shipped server-side; gates apply once incident/threat routes land in step 4. |
-| G4 | Global event log | 🟡 | Rules written (not deployed) — `server/firestore-rules/`. Deploy when step 2 (auth) lands. |
+| G4 | Global event log | 🟡 | Postgres schema + RLS shipped in `supabase/migrations/001_init.sql`. Apply via Supabase dashboard SQL editor; takes effect immediately. |
 | G5 | Hard-coded campus/zones/roster | ⬜ | Replaced by config-driven UI + admin console — steps 7 + 11 |
 | G6 | No privacy/compliance controls | ⬜ | Compliance program — step 12 |
 | G7 | No server-side validation | ⬜ | Authoritative backend — step 4 |
@@ -29,11 +29,11 @@ Last refreshed: end of scaffolding session.
 
 | Req | Status | Note |
 |---|---|---|
-| R8.1.1 — email/OTP + Apple + Google | 🟡 | Server accepts any Firebase Auth provider; need Firebase console toggle. Email-link works zero-config; Apple/Google need keys per KEYS.md §4 §5. |
+| R8.1.1 — email/OTP + Apple + Google | 🟡 | App SignInScreen + signIn.ts ships all three flows. Magic-link works zero-config in Supabase. Google + Apple need provider credentials configured in Supabase dashboard (KEYS.md §4 §5). |
 | R8.1.2 — bound to one verified org + role; never self-selected | 🟡 | Enforced server-side in `join` + `bootstrap`: collectionGroup check before insert; role comes from code, not request body. |
 | R8.1.3 — invitation/verification-gated join | 🟡 | Join codes shipped (`/v1/auth/join-codes` + `/v1/auth/join`); domain-verified email + roster import are P1. |
 | R8.1.4 — verified guardian linking | ⬜ | Contract drafted in `shared/src/auth/`; endpoint lands next session. |
-| R8.1.5 — `expo-secure-store` tokens, refresh, server revocation | ⬜ | App-side, next session. Server revocation works today (Firebase `revokeRefreshTokens`). |
+| R8.1.5 — `expo-secure-store` tokens, refresh, server revocation | 🟡 | Supabase persists session in AsyncStorage today; moving to expo-secure-store is a one-line swap (`storage` option). Auto-refresh on. Server revocation via Supabase Admin SDK. |
 | R8.1.6 — recovery cannot hijack role-bearing identity | ⬜ | Future. Today: deletion + re-bootstrap is admin-only. |
 | R8.1.7 — minor handling + FERPA school-official path | 🟡 | `isMinor` flag set true for students in `joinCode.ts`; full FERPA pathway via admin console (step 11). |
 | R8.1.8 — admin MFA / SIS import / SSO | 🚫 | P1/P2 |
@@ -52,7 +52,7 @@ Last refreshed: end of scaffolding session.
 | Req | Status | Note |
 |---|---|---|
 | R8.3.1 — Organization → Campus → Users/Zones/Incidents/Messages | 🟡 | types in `shared/src/domain/`; Firestore schema reflected in rules |
-| R8.3.2 — hard isolation by `campusId` in rules + server | 🟡 | rules written (`server/firestore-rules/`); not deployed until auth lands |
+| R8.3.2 — hard isolation by `campusId` in rules + server | 🟡 | RLS policies in `supabase/migrations/001_init.sql` filter every row by `jwt_campus_id() = campus_id` |
 | R8.3.3 — per-campus config/branding/roster/zones/retention/audit | ⬜ | rules permit; admin console (step 11) populates |
 | R8.3.4 — district rollups / mutual aid | 🚫 | P1/P2 |
 
@@ -150,7 +150,7 @@ Last refreshed: end of scaffolding session.
 | Tokens in `expo-secure-store`, not AsyncStorage | ⬜ | step 2 |
 | Config-driven UI (campus/zones/branding/roster/policy from backend) | ⬜ | step 7 |
 | Authoritative backend mediates every write | 🟡 | Server foundation up (express + Firebase Admin SDK); auth routes live, incident/threat/messages routes in step 4. |
-| Firestore + RTDB scoped by `campusId` with security rules | 🟡 | step 1 — rules + indexes + storage rules written in `server/firestore-rules/`; deploy gated on auth |
+| Postgres + RLS scoped by `campus_id` (via Supabase) | 🟡 | step 1 — schema + RLS policies in `supabase/migrations/001_init.sql`. Realtime replication enabled on incidents/threats/messages/location_points. |
 | AI proxy with KMS keys + provider-agnostic interface + fallback chain | ⬜ | step 5 |
 | Server push dispatcher (APNs/FCM via Expo Push or direct) | ⬜ | step 6 |
 | Offline client queue + server dedup by event id | 🟡 | v1 has client queue; dedup is new |

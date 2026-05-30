@@ -10,10 +10,12 @@ const ServerEnvSchema = z
     PORT: z.coerce.number().int().positive().default(4000),
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
-    // Firebase Admin SDK — KEYS.md §1
-    FIREBASE_PROJECT_ID: z.string().min(1),
-    FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional(),
-    FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+    // Supabase — KEYS.md §1
+    SUPABASE_URL: z.string().url(),
+    SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
+    SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+    SUPABASE_JWT_SECRET: z.string().min(1),
+    SUPABASE_DB_URL: z.string().url().optional(),
 
     // Gemini (server-only) — KEYS.md §2
     GEMINI_API_KEY: z.string().min(1),
@@ -22,13 +24,13 @@ const ServerEnvSchema = z
     // Google Geocoding (server-only) — KEYS.md §3
     GOOGLE_GEOCODING_API_KEY: z.string().optional(),
 
-    // Sign in with Apple (server verification) — KEYS.md §4
+    // Sign in with Apple — KEYS.md §4 (Supabase brokers; kept for reference)
     APPLE_TEAM_ID: z.string().optional(),
     APPLE_SERVICES_ID: z.string().optional(),
     APPLE_KEY_ID: z.string().optional(),
     APPLE_PRIVATE_KEY_PATH: z.string().optional(),
 
-    // Google OAuth (server verification) — KEYS.md §5
+    // Google OAuth (Supabase brokers) — KEYS.md §5
     GOOGLE_OAUTH_WEB_CLIENT_ID: z.string().optional(),
 
     // APNs — KEYS.md §6
@@ -37,6 +39,10 @@ const ServerEnvSchema = z
     APNS_PRIVATE_KEY_PATH: z.string().optional(),
     APNS_BUNDLE_ID: z.string().optional(),
     APNS_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
+
+    // FCM (Android Push) — KEYS.md §7
+    FCM_SERVICE_ACCOUNT_PATH: z.string().optional(),
+    FCM_SERVICE_ACCOUNT_JSON: z.string().optional(),
 
     // Expo Push — KEYS.md §8
     EXPO_ACCESS_TOKEN: z.string().optional(),
@@ -50,13 +56,6 @@ const ServerEnvSchema = z
     KMS_KEY_RESOURCE: z.string().optional(),
   })
   .superRefine((env, ctx) => {
-    if (!env.FIREBASE_SERVICE_ACCOUNT_PATH && !env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'either FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON is required',
-        path: ['FIREBASE_SERVICE_ACCOUNT_PATH'],
-      });
-    }
     if (env.NODE_ENV === 'production') {
       if (!env.KMS_PROVIDER || !env.KMS_KEY_RESOURCE) {
         ctx.addIssue({
@@ -69,9 +68,11 @@ const ServerEnvSchema = z
   });
 
 const KEYS_MD_ANCHORS: Record<string, string> = {
-  FIREBASE_PROJECT_ID: 'KEYS.md §1',
-  FIREBASE_SERVICE_ACCOUNT_PATH: 'KEYS.md §1',
-  FIREBASE_SERVICE_ACCOUNT_JSON: 'KEYS.md §1',
+  SUPABASE_URL: 'KEYS.md §1',
+  SUPABASE_PUBLISHABLE_KEY: 'KEYS.md §1',
+  SUPABASE_SERVICE_ROLE_KEY: 'KEYS.md §1',
+  SUPABASE_JWT_SECRET: 'KEYS.md §1',
+  SUPABASE_DB_URL: 'KEYS.md §1',
   GEMINI_API_KEY: 'KEYS.md §2',
   GEMINI_MODEL: 'KEYS.md §2',
   GOOGLE_GEOCODING_API_KEY: 'KEYS.md §3',
@@ -84,6 +85,8 @@ const KEYS_MD_ANCHORS: Record<string, string> = {
   APNS_TEAM_ID: 'KEYS.md §6',
   APNS_PRIVATE_KEY_PATH: 'KEYS.md §6',
   APNS_BUNDLE_ID: 'KEYS.md §6',
+  FCM_SERVICE_ACCOUNT_PATH: 'KEYS.md §7',
+  FCM_SERVICE_ACCOUNT_JSON: 'KEYS.md §7',
   EXPO_ACCESS_TOKEN: 'KEYS.md §8',
   EAS_PROJECT_ID: 'KEYS.md §8',
   SENTRY_DSN: 'KEYS.md §10',
