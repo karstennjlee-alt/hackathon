@@ -15,7 +15,7 @@ Last refreshed: end of scaffolding session.
 | G1 | No real authentication | ⬜ | Replaced by R8.1 — Phase 0 step 2 |
 | G2 | Secrets in client bundle | ⬜ | Replaced by AI proxy + KMS — Phase 0 step 5 |
 | G3 | Hard-coded `'cwb'` password | ⬜ | Replaced by RBAC + step-up — Phase 0 step 3 |
-| G4 | Global event log | ⬜ | Replaced by tenant-scoped data model — Phase 0 step 1 |
+| G4 | Global event log | 🟡 | Rules written (not deployed) — `server/firestore-rules/`. Deploy when step 2 (auth) lands. |
 | G5 | Hard-coded campus/zones/roster | ⬜ | Replaced by config-driven UI + admin console — steps 7 + 11 |
 | G6 | No privacy/compliance controls | ⬜ | Compliance program — step 12 |
 | G7 | No server-side validation | ⬜ | Authoritative backend — step 4 |
@@ -51,9 +51,9 @@ Last refreshed: end of scaffolding session.
 
 | Req | Status | Note |
 |---|---|---|
-| R8.3.1 — Organization → Campus → Users/Zones/Incidents/Messages | ⬜ | data model in PRD §12 |
-| R8.3.2 — hard isolation by `campusId` in rules + server | ⬜ | remove global `beacon5/events` path |
-| R8.3.3 — per-campus config/branding/roster/zones/retention/audit | ⬜ | |
+| R8.3.1 — Organization → Campus → Users/Zones/Incidents/Messages | 🟡 | types in `shared/src/domain/`; Firestore schema reflected in rules |
+| R8.3.2 — hard isolation by `campusId` in rules + server | 🟡 | rules written (`server/firestore-rules/`); not deployed until auth lands |
+| R8.3.3 — per-campus config/branding/roster/zones/retention/audit | ⬜ | rules permit; admin console (step 11) populates |
 | R8.3.4 — district rollups / mutual aid | 🚫 | P1/P2 |
 
 ## §8.4 Campus threat declaration
@@ -150,7 +150,7 @@ Last refreshed: end of scaffolding session.
 | Tokens in `expo-secure-store`, not AsyncStorage | ⬜ | step 2 |
 | Config-driven UI (campus/zones/branding/roster/policy from backend) | ⬜ | step 7 |
 | Authoritative backend mediates every write | ⬜ | step 4 |
-| Firestore + RTDB scoped by `campusId` with security rules | ⬜ | step 1 |
+| Firestore + RTDB scoped by `campusId` with security rules | 🟡 | step 1 — rules + indexes + storage rules written in `server/firestore-rules/`; deploy gated on auth |
 | AI proxy with KMS keys + provider-agnostic interface + fallback chain | ⬜ | step 5 |
 | Server push dispatcher (APNs/FCM via Expo Push or direct) | ⬜ | step 6 |
 | Offline client queue + server dedup by event id | 🟡 | v1 has client queue; dedup is new |
@@ -165,7 +165,7 @@ Last refreshed: end of scaffolding session.
 | Configurable retention per campus + auto-purge of LocationPoints | ⬜ | |
 | Consent records (timestamp + scope) | ⬜ | |
 | Immutable audit (actor + time + device) | ⬜ | |
-| Data minimization (parents see linked child only; students never see others' locations) | 🟡 | enforced in v1 UI; must be enforced in server queries |
+| Data minimization (parents see linked child only; students never see others' locations) | 🟡 | enforced in v1 UI; rules now enforce at DB layer (parent reads gated by `linkedStudents` claim; students restricted to own incident/location) |
 | Step-up auth / MFA for admin + threat actions | ⬜ | |
 | Rate limits + abuse protection on AI proxy + auth | ⬜ | |
 

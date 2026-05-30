@@ -1,0 +1,26 @@
+// Beacon5 v2 — Cloud Storage security rules.
+// Storage holds campus branding assets (logos), and later may hold message
+// attachments. All access is campus-scoped via the auth token claim.
+//
+// ⚠ DO NOT DEPLOY YET — see server/firestore-rules/README.md.
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Campus branding (logos uploaded via admin console).
+    // Read: anyone in the campus can render the logo.
+    // Write: server only (admin console → backend → Admin SDK signed upload).
+    match /campuses/{campusId}/branding/{fileName} {
+      allow read:  if request.auth != null
+                  && request.auth.token.campusId == campusId;
+      allow write: if false;
+    }
+
+    // Deny anything else by default. Defense in depth.
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
