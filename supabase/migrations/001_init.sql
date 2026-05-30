@@ -55,15 +55,8 @@ language sql stable as $$
   select public.jwt_role() = 'parent';
 $$;
 
-create or replace function public.is_linked_guardian(student_uid uuid) returns boolean
-language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from public.guardian_links gl
-    where gl.guardian_user_id = auth.uid()
-      and gl.student_user_id = student_uid
-      and gl.verified = true
-  );
-$$;
+-- is_linked_guardian() is defined LATER, after guardian_links table exists,
+-- because SQL function bodies are parsed eagerly at CREATE FUNCTION time.
 
 -- ──────────────────────────────────────────────────────────────────
 -- organizations
@@ -153,6 +146,17 @@ create policy "guardian reads own links"
     campus_id = public.jwt_campus_id()
     and (guardian_user_id = auth.uid() or public.is_staff())
   );
+
+-- Now that guardian_links exists, define the helper that depends on it.
+create or replace function public.is_linked_guardian(student_uid uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.guardian_links gl
+    where gl.guardian_user_id = auth.uid()
+      and gl.student_user_id = student_uid
+      and gl.verified = true
+  );
+$$;
 
 -- ──────────────────────────────────────────────────────────────────
 -- zones
