@@ -139,6 +139,14 @@ service cloud.firestore {
         allow read:  if sameCampus(cid) && resource.data.userId == uid();
         allow write: if false;
       }
+
+      // Join codes — staff/admin readable for management; clients never
+      // read them directly (redemption happens server-side via /v1/auth/join).
+      // Server writes via Admin SDK only.
+      match /joinCodes/{code} {
+        allow read:  if sameCampus(cid) && isStaff();
+        allow write: if false;
+      }
     }
 
     // ────────── deny everything else ──────────
