@@ -1,0 +1,14 @@
+{
+  "name": "@beacon5/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Beacon5 shared types and contracts (domain events, RBAC matrix, AI prompt templates).",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

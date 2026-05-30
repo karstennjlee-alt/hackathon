@@ -1,3 +1,8 @@
+// IMPORTANT: env validation MUST be the first import.
+// This throws a red-box at boot if any required EXPO_PUBLIC_* var is missing,
+// naming the var and its KEYS.md section. No silent misconfiguration.
+import './src/env';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';
