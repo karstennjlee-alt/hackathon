@@ -1,0 +1,55 @@
+{
+  "//": [
+    "Beacon5 v2 — Realtime Database security rules.",
+    "RTDB carries low-latency live state: active campus threat, beacon heartbeats,",
+    "presence. Persistent / queryable data lives in Firestore (see firestore.rules).",
+    "",
+    "All paths are scoped under /campuses/$campusId/... Tenant isolation by token",
+    "claim auth.token.campusId === $campusId. Server-only writes for everything",
+    "except the user's own presence row.",
+    "",
+    "Custom claims expected (set server-side after login):",
+    "  - auth.token.campusId  : string  — tenant",
+    "  - auth.token.role      : 'student' | 'parent' | 'staff' | 'admin'",
+    "  - auth.token.linkedStudents : string[]  — for parents only",
+    "",
+    "⚠ DO NOT DEPLOY YET — see server/firestore-rules/README.md",
+    "  The running v1 monolith writes anonymously to /beacon5/events. Deploying",
+    "  these rules before Phase 0 step 2 (auth) lands will break v1 immediately."
+  ],
+
+  "rules": {
+    ".read":  false,
+    ".write": false,
+
+    "campuses": {
+      "$campusId": {
+        ".read":  "auth != null && auth.token.campusId === $campusId",
+
+        "threats": {
+          "active": {
+            "//": "Mirror of the latest CampusThreat doc — read-only mirror.",
+            ".write": false
+          }
+        },
+
+        "incidents": {
+          "$incidentId": {
+            "heartbeat": {
+              "//": "Server writes a periodic heartbeat so staff dashboards show live activity.",
+              ".write": false
+            }
+          }
+        },
+
+        "presence": {
+          "$userId": {
+            "//": "Each user writes their own online/offline state. Used to surface 'present in app' vs not.",
+            ".write": "auth != null && auth.uid === $userId && auth.token.campusId === $campusId",
+            ".validate": "newData.hasChildren(['online', 'at']) && newData.child('online').isBoolean() && newData.child('at').isNumber()"
+          }
+        }
+      }
+    }
+  }
+}
