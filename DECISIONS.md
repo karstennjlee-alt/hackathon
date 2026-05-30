@@ -88,17 +88,21 @@ Each decision below is **a default**, not a final answer. When the user signals 
 
 ### D8. Backend hosting
 
-**Default:** **Firebase Cloud Functions (2nd gen, Node.js)** for the API + AI proxy.
+**Default:** **Node + Express on a long-running host** (Fly.io / Render / Cloud Run, TBD) for the API + AI proxy. Supabase Edge Functions for thin server-side endpoints that need to be close to the database.
 
-**Why:** Already in the Firebase project. No separate hosting + auth + secrets dance. Easy to swap to Cloud Run if a function grows past the proxy use case.
+**Why:** v2 pivoted from Firebase Cloud Functions to Supabase. We still want a separate Node backend for the Gemini proxy (server-only key), push dispatcher, complex multi-table operations, and audit log writes — Supabase Edge Functions are stateless Deno + tightly scoped and are not where we want long-running AI calls. Hot-path target (1.5s p95) demands a warm instance.
 
-**Risk:** Cold start latency. The hot path (alert clarify) has a 1.5s p95 target (PRD §14). If cold starts blow that, switch the AI proxy to **Cloud Run with minimum 1 instance** and keep everything else on Functions.
+**Updated 2026-05-24:** Switched from Firebase to Supabase — see D9.
 
-### D9. Realtime layer
+### D9. Realtime layer + database
 
-**Default:** **Firestore** for the typed/queryable data (Users, Campuses, Incidents, Messages, Audit) + **Realtime Database** for the low-latency live presence subscription (active campus threat status, beacons in flight). Both behind security rules scoped by `campusId`.
+**Default:** **Supabase Postgres** for all structured data + **Supabase Realtime** (Postgres replication) for live subscriptions. Row Level Security policies on every table, all scoped by `campus_id`.
 
-**Why:** v1 already uses RTDB for live events — keep what works for that. Firestore handles the rest because it indexes queries we'll actually need (audit log filters, roster searches).
+**Why:** Real database + real SQL + real foreign keys + real transactions — better fit for the relational structure (Organization → Campus → Users / Incidents / Messages / Audit) than Firestore's eventually-consistent document model. RLS is more powerful than Firestore rules (full SQL expressivity, no `get()`-fee-per-rule). Realtime gives us per-row subscriptions for free.
+
+**Updated 2026-05-24:** Switched from Firestore + RTDB to Supabase Postgres + Realtime. v1 monolith stays on Firebase RTDB on `main`; v2 starts fresh on Supabase.
+
+**Risk:** No mature managed offline-first sync the way Firebase RTDB has. v1's offline event queue (AsyncStorage + serverTimestamp dedup) ports cleanly — we keep that pattern in v2.
 
 ### D10. AI provider abstraction
 

@@ -5,9 +5,9 @@ import './src/env';
 
 import { registerRootComponent } from 'expo';
 
-import App from './App';
+import AppRoot from './AppRoot';
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
-registerRootComponent(App);
+// AppRoot wraps the v1 App in the auth gate (sign-in screen first, then v1
+// monolith once authed). The bare v1 App can still be imported directly
+// from './App' for ad-hoc testing.
+registerRootComponent(AppRoot);

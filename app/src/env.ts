@@ -10,18 +10,9 @@ import { z } from 'zod';
 const AppEnvSchema = z.object({
   EXPO_PUBLIC_API_BASE_URL: z.string().url(),
 
-  // Firebase web config — KEYS.md §1
-  EXPO_PUBLIC_FIREBASE_API_KEY: z.string().min(1),
-  EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: z.string().min(1),
-  EXPO_PUBLIC_FIREBASE_PROJECT_ID: z.string().min(1),
-  EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: z.string().min(1),
-  EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: z.string().min(1),
-  EXPO_PUBLIC_FIREBASE_APP_ID: z.string().min(1),
-  EXPO_PUBLIC_FIREBASE_DATABASE_URL: z.string().url(),
-
-  // Google Sign-In — KEYS.md §5
-  EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: z.string().optional(),
-  EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: z.string().optional(),
+  // Supabase (Postgres + Auth + Realtime + Storage) — KEYS.md §1
+  EXPO_PUBLIC_SUPABASE_URL: z.string().url(),
+  EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
 
   // Google Maps Android — KEYS.md §9
   EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY: z.string().optional(),
@@ -38,15 +29,8 @@ const AppEnvSchema = z.object({
 
 const KEYS_MD_ANCHORS: Record<string, string> = {
   EXPO_PUBLIC_API_BASE_URL: 'README.md (root) — backend base URL',
-  EXPO_PUBLIC_FIREBASE_API_KEY: 'KEYS.md §1',
-  EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: 'KEYS.md §1',
-  EXPO_PUBLIC_FIREBASE_PROJECT_ID: 'KEYS.md §1',
-  EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: 'KEYS.md §1',
-  EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: 'KEYS.md §1',
-  EXPO_PUBLIC_FIREBASE_APP_ID: 'KEYS.md §1',
-  EXPO_PUBLIC_FIREBASE_DATABASE_URL: 'KEYS.md §1',
-  EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: 'KEYS.md §5',
-  EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: 'KEYS.md §5',
+  EXPO_PUBLIC_SUPABASE_URL: 'KEYS.md §1',
+  EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'KEYS.md §1',
   EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY: 'KEYS.md §9',
   EXPO_PUBLIC_SENTRY_DSN: 'KEYS.md §10',
 };
