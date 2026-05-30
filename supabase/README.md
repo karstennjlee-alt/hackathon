@@ -18,7 +18,7 @@ The file is idempotent — re-running is safe (every `CREATE` uses `IF NOT EXIST
 
 ```bash
 brew install supabase/tap/supabase
-supabase link --project-ref sapqeqeaelqujgwruues
+supabase link --project-ref iyjoqlixbatyfguxizko
 supabase db push                       # pushes migrations/ to the linked project
 ```
 
@@ -27,8 +27,8 @@ supabase db push                       # pushes migrations/ to the linked projec
 Authentication → Providers:
 
 - **Email** — toggle on. Choose Magic Link (passwordless) or password. Magic Link is the lowest-friction default for v2.
-- **Google** — toggle on, paste in your Google OAuth Web Client ID + Secret ([KEYS.md §5.3](../KEYS.md)). Add `https://sapqeqeaelqujgwruues.supabase.co/auth/v1/callback` to authorized redirect URIs in Google Cloud → Credentials.
-- **Apple** — toggle on, paste in Services ID, Team ID, Key ID, `.p8` contents ([KEYS.md §4](../KEYS.md)). Supabase becomes the relying party — Apple sends the user back to `https://sapqeqeaelqujgwruues.supabase.co/auth/v1/callback`.
+- **Google** — toggle on, paste in your Google OAuth Web Client ID + Secret ([KEYS.md §5.3](../KEYS.md)). Add `https://iyjoqlixbatyfguxizko.supabase.co/auth/v1/callback` to authorized redirect URIs in Google Cloud → Credentials.
+- **Apple** — toggle on, paste in Services ID, Team ID, Key ID, `.p8` contents ([KEYS.md §4](../KEYS.md)). Supabase becomes the relying party — Apple sends the user back to `https://iyjoqlixbatyfguxizko.supabase.co/auth/v1/callback`.
 
 The app's `signInWithOAuth({ provider })` call works once each provider is toggled on with valid credentials.
 

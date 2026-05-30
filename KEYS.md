@@ -30,7 +30,7 @@ You need **three separate Supabase projects** in production: `beacon5-dev`, `bea
 
 | # | Var | Side | Where to get it | Restrict by |
 |---|---|---|---|---|
-| 1.1 | `SUPABASE_URL` (server) / `EXPO_PUBLIC_SUPABASE_URL` (app) / `VITE_SUPABASE_URL` (admin) | URL is **safe everywhere** | Supabase dashboard → ⚙ Project Settings → Data API → Project URL (e.g. `https://sapqeqeaelqujgwruues.supabase.co`) | n/a — it's just an identifier |
+| 1.1 | `SUPABASE_URL` (server) / `EXPO_PUBLIC_SUPABASE_URL` (app) / `VITE_SUPABASE_URL` (admin) | URL is **safe everywhere** | Supabase dashboard → ⚙ Project Settings → Data API → Project URL (e.g. `https://iyjoqlixbatyfguxizko.supabase.co`) | n/a — it's just an identifier |
 | 1.2 | `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (app) / `VITE_SUPABASE_PUBLISHABLE_KEY` (admin) | **client-safe** — prefixed `sb_publishable_*`, designed to be public | Supabase dashboard → ⚙ Project Settings → API Keys → Publishable key | Row Level Security policies on every table (Phase 0 step 1 migration) |
 | 1.3 | `SUPABASE_SERVICE_ROLE_KEY` | **server only** — prefixed `sb_secret_*` (also displayed as the "service_role" JWT). **Bypasses ALL RLS.** | Supabase dashboard → ⚙ Project Settings → API Keys → "service_role" (click "Reveal") | Server-side only; KMS in prod. If it ever leaks anywhere a client can read, **rotate immediately**. |
 | 1.4 | `SUPABASE_JWT_SECRET` | **server only** | Supabase dashboard → ⚙ Project Settings → JWT Settings → "JWT Secret" → "Reveal" | Used to verify user JWTs server-side. Rotating it logs everyone out. |
