@@ -1,13 +1,52 @@
+# Dependencies
 node_modules/
-.expo/
 .npm-cache/
+
+# Build outputs
 dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Expo
+.expo/
+.expo-shared/
+
+# iOS / Android native
+ios/build/
+android/.gradle/
+android/build/
+android/app/build/
+
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.DS_Store
+expo-debug.log
 
-# Secrets / local env
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / local env (NEVER commit)
 .env
 .env.local
 .env.*.local
+*/secrets/
+*/.env
+*/.env.local
+*/.env.*.local
+
+# Apple .p8 keys and Firebase service accounts (NEVER commit)
+*.p8
+firebase-service-account*.json
+google-services.json
+GoogleService-Info.plist
+
+# IDE
+.vscode/
+.idea/
+
+# Test
+coverage/
