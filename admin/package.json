@@ -1,0 +1,14 @@
+{
+  "name": "@beacon5/admin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Beacon5 web admin console — org config, roster, zones, branding, policy, audit log.",
+  "scripts": {
+    "dev": "echo 'Admin console not yet implemented — Phase 0 step 11' && exit 0",
+    "build": "echo 'Admin console not yet implemented — Phase 0 step 11' && exit 0",
+    "typecheck": "echo 'No code to typecheck yet' && exit 0"
+  },
+  "dependencies": {
+    "@beacon5/shared": "*"
+  }
+}
