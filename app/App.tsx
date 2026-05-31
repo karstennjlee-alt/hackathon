@@ -10,6 +10,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { aiClarifyAlert, aiBrief, aiAllClear, aiPolishBroadcast } from './src/ai/client';
 import { initializeApp, getApps } from 'firebase/app';
 import {
   getDatabase,
@@ -780,32 +781,21 @@ const paletteFor = (mode: 'dark' | 'light'): ThemePalette =>
 async function polishMassBroadcast(
   draft: string,
   audienceLabel: string,
-  senderName: string,
-  events: BeaconEvent[],
+  _senderName: string,
+  _events: BeaconEvent[],
   signal?: AbortSignal,
 ): Promise<string> {
   const trimmed = draft.trim();
   if (!trimmed) return trimmed;
-  const activeIncidents = deriveActiveIncidents(events);
-  const threatActive = isCampusThreatActive(events);
-  const recentNotes = events
-    .filter((e): e is Extract<BeaconEvent, { type: 'INCIDENT_NOTE' }> => e.type === 'INCIDENT_NOTE')
-    .slice(-4)
-    .map((n) => `- ${n.studentName} (${n.kind}): ${n.polishedNote}`)
-    .join('\n');
-  const activeList = activeIncidents
-    .map((i) => `- ${i.studentName} in ${i.zoneDescription ?? 'unknown area'}`)
-    .join('\n') || '(none)';
-  const prompt = `You are the official campus safety voice writing a mass broadcast for ${audienceLabel}. The admin ${senderName} drafted the message below. Rewrite it as a single calm, clear, official message based on the live situation. Be concise (max 2 short sentences, ~40 words). Include only facts that are present in the draft or the situation snapshot — never invent details. Do NOT mention 911/police/EMS. Do NOT start with "Update:" or "Attention:". Output ONLY the polished broadcast text, no preamble.
-
-Campus threat active: ${threatActive ? 'YES' : 'no'}
-Active beacons:
-${activeList}
-Recent reports:
-${recentNotes || '(none)'}
-
-Admin draft: "${trimmed}"`;
-  const result = await callGemini(prompt, signal);
+  const audience: 'students' | 'parents' | 'staff' | 'everyone' =
+    audienceLabel === 'students'
+      ? 'students'
+      : audienceLabel === 'parents'
+      ? 'parents'
+      : audienceLabel === 'teachers' || audienceLabel === 'staff'
+      ? 'staff'
+      : 'everyone';
+  const result = await aiPolishBroadcast({ draft: trimmed, audience }, signal);
   return result?.trim() || trimmed;
 }
 
@@ -903,31 +893,6 @@ async function fireLocalNotification(
   }
 }
 
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '';
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
-async function callGemini(prompt: string, signal?: AbortSignal): Promise<string | null> {
-  if (!GEMINI_API_KEY) return null;
-  try {
-    const res = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 256 },
-      }),
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-    return typeof text === 'string' ? text.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
 function haversineMeters(a: Coords, b: Coords): number {
   const R = 6371000;
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -1002,21 +967,14 @@ async function polishIncidentNote(
       ? `${first} reports a threat. No details.`
       : `${first} reports a medical need. No details.`;
   }
-  const prompt = `You are a campus safety push notification writer. A student named ${studentName} just flagged a ${kind === 'threat' ? 'THREAT SIGHTING' : 'MEDICAL NEED'}.
-
-Compress their raw input into ONE alert that fits a phone lock-screen banner. STRICT requirements:
-- HARD MAX 12 words. Count them.
-- Lead with the student's first name.
-- Keep concrete details (weapons, body parts, locations, symptoms) - never invent any.
-- Drop filler words. No preamble, no quotes.
-- No police/911/EMS mention.
-
-Raw input: "${trimmed}"
-
-Output ONLY the alert text.`;
-  const result = await callGemini(prompt, signal);
+  const result = await aiClarifyAlert(
+    {
+      studentLabel: `${studentName} (${kind === 'threat' ? 'threat sighting' : 'medical need'})`,
+      context: trimmed,
+    },
+    signal,
+  );
   if (result) {
-    // Hard cap as safety net in case Gemini over-runs.
     const words = result.split(/\s+/);
     if (words.length > 14) return words.slice(0, 14).join(' ') + '...';
     return result;
@@ -1028,36 +986,14 @@ Output ONLY the alert text.`;
 async function generateAllClearBroadcast(
   studentName: string,
   zone: string,
-  coords: Coords | null,
-  zoneDescription: string | undefined,
+  _coords: Coords | null,
+  _zoneDescription: string | undefined,
   signal?: AbortSignal,
 ): Promise<string> {
-  const locationLine = coords
-    ? `GPS ${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)} (~${Math.round(coords.accuracy ?? 0)}m). ${zoneDescription ?? ''}`.trim()
-    : 'GPS not available.';
-  const prompt = `You are the calm official voice of campus safety staff at a high school. A student named ${studentName} just had an active beacon in ${zone}. ${locationLine}
-
-A school staff member has now marked the situation ALL CLEAR after on-site verification.
-
-Write the broadcast that goes to ${studentName} and their guardian. Requirements:
-- 2 short sentences, max 35 words total.
-- Calm, official, reassuring.
-- Confirm the all-clear, mention the student by first name, give one clear next step (e.g. "stay seated, you'll be released to your guardian shortly").
-- Do NOT mention police, EMS, or 911.
-- Do NOT use the word "AI".
-
-Output ONLY the broadcast text. No preamble.`;
-  const result = await callGemini(prompt, signal);
-  if (result) return result;
   const first = studentName.split(' ')[0];
-  return `All clear, ${first}. Staff have verified the area and you are safe. Please stay in place until a staff member or your guardian arrives.`;
-}
-
-async function reverseGeocodeWithGemini(coords: Coords, signal?: AbortSignal): Promise<string | null> {
-  const prompt = `You are a campus safety assistant. A student just activated an emergency beacon at these GPS coordinates: latitude ${coords.latitude.toFixed(6)}, longitude ${coords.longitude.toFixed(6)} (accuracy ~${coords.accuracy ?? 'unknown'}m).
-
-In ONE short sentence (max 18 words), describe the most likely physical area or landmark this corresponds to. Be concrete (e.g. "near the cafeteria entrance" or "on the north sidewalk along Main Street"). If you cannot determine specifics, say "Approximate area only - awaiting staff verification."`;
-  return callGemini(prompt, signal);
+  const fallback = `All clear, ${first}. Staff have verified the area and you are safe. Please stay in place until a staff member or your guardian arrives.`;
+  const text = await aiAllClear({ campusName: zone }, signal);
+  return text ?? fallback;
 }
 
 const computeZoneVerifications = (
@@ -1506,15 +1442,8 @@ export default function App() {
           lastAccuracy: lastAcceptedAccuracy,
         }).catch(() => undefined);
 
-        if (coords) {
-          const description = await reverseGeocodeWithGemini(coords);
-          if (description) {
-            zoneDescription = description;
-            setIncident((cur) =>
-              cur && cur.id === id ? { ...cur, zoneDescription: description } : cur,
-            );
-          }
-        }
+        // Reverse-geocoding now lives server-side (planned via Google Geocoding
+        // API). For now the GPS coords stand on their own.
       }
     } catch (err) {
       setIncident((cur) =>
@@ -3283,15 +3212,15 @@ function StaffMode({
       setGeminiText(null);
       return () => controller.abort();
     }
-    const prompt = `You are the calm campus safety commander brief. ONE sentence (max 22 words). State who activated a beacon, where, and the single next operational step staff should take. Do NOT mention 911/police/EMS.
-
-Student: ${top.studentName}
-GPS: ${top.coords ? `${top.coords.latitude.toFixed(5)}, ${top.coords.longitude.toFixed(5)}` : 'unavailable'}
-Area: ${top.zoneDescription ?? 'unknown'}
-
-Output ONLY the brief sentence.`;
+    const briefInput = {
+      incidentType: `Beacon activated by ${top.studentName}`,
+      campusName: profile.campusName ?? 'campus',
+      location: top.zoneDescription ?? (top.coords
+        ? `GPS ${top.coords.latitude.toFixed(5)}, ${top.coords.longitude.toFixed(5)}`
+        : 'unknown'),
+    };
     const timer = setTimeout(() => {
-      callGemini(prompt, controller.signal).then((text) => {
+      aiBrief(briefInput, controller.signal).then((text) => {
         if (!controller.signal.aborted) setGeminiText(text);
       });
     }, 400);
