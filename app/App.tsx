@@ -11,15 +11,7 @@ import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { aiClarifyAlert, aiBrief, aiAllClear, aiPolishBroadcast } from './src/ai/client';
-import { initializeApp, getApps } from 'firebase/app';
-import {
-  getDatabase,
-  ref as dbRef,
-  onValue,
-  push as dbPush,
-  set as dbSet,
-  serverTimestamp,
-} from 'firebase/database';
+import { subscribeToEvents, appendEvent, clearEvents } from './src/data/events';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -390,117 +382,8 @@ type BeaconEvent =
 
 const PRINCIPAL_PASSWORD = 'cwb';
 
-const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  databaseURL: process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL,
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-};
-
-const firebaseApp =
-  getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-const database = getDatabase(firebaseApp);
-const EVENTS_PATH = 'beacon5/events';
-
-function subscribeToEvents(onEvents: (events: BeaconEvent[]) => void): () => void {
-  const eventsRef = dbRef(database, EVENTS_PATH);
-  const unsubscribe = onValue(
-    eventsRef,
-    (snapshot) => {
-      const val = snapshot.val();
-      if (!val || typeof val !== 'object') {
-        onEvents([]);
-        return;
-      }
-      const list = Object.values(val) as Array<BeaconEvent & { serverAt?: number }>;
-      list.sort((a, b) => {
-        const aTs = typeof a.serverAt === 'number' ? a.serverAt : a.at;
-        const bTs = typeof b.serverAt === 'number' ? b.serverAt : b.at;
-        return aTs - bTs;
-      });
-      onEvents(list);
-    },
-    (error) => {
-      console.warn('Firebase events subscription error:', error.message);
-      onEvents([]);
-    },
-  );
-  return () => unsubscribe();
-}
-
-const PENDING_EVENTS_KEY = 'beacon5.pendingEvents.v1';
-
-async function loadPendingEvents(): Promise<BeaconEvent[]> {
-  try {
-    const raw = await AsyncStorage.getItem(PENDING_EVENTS_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as BeaconEvent[];
-  } catch {
-    return [];
-  }
-}
-
-async function savePendingEvents(events: BeaconEvent[]): Promise<void> {
-  try {
-    if (events.length === 0) {
-      await AsyncStorage.removeItem(PENDING_EVENTS_KEY);
-    } else {
-      await AsyncStorage.setItem(PENDING_EVENTS_KEY, JSON.stringify(events.slice(-50)));
-    }
-  } catch {
-    // best effort
-  }
-}
-
-async function pushEventToFirebase(event: BeaconEvent): Promise<void> {
-  const eventsRef = dbRef(database, EVENTS_PATH);
-  await dbPush(eventsRef, { ...event, serverAt: serverTimestamp() });
-}
-
-let flushingQueue = false;
-async function flushPendingEvents(): Promise<void> {
-  if (flushingQueue) return;
-  flushingQueue = true;
-  try {
-    let pending = await loadPendingEvents();
-    while (pending.length > 0) {
-      const next = pending[0];
-      try {
-        await pushEventToFirebase(next);
-        pending = pending.slice(1);
-        await savePendingEvents(pending);
-      } catch {
-        // network still bad, stop trying for now
-        break;
-      }
-    }
-  } finally {
-    flushingQueue = false;
-  }
-}
-
-async function appendEvent(event: BeaconEvent): Promise<void> {
-  try {
-    await pushEventToFirebase(event);
-    flushPendingEvents().catch(() => undefined);
-  } catch (err) {
-    console.warn('Firebase appendEvent queued for retry:', err);
-    const pending = await loadPendingEvents();
-    await savePendingEvents([...pending, event]);
-  }
-}
-
-async function clearEvents(): Promise<void> {
-  try {
-    await dbSet(dbRef(database, EVENTS_PATH), null);
-    await savePendingEvents([]);
-  } catch (err) {
-    console.warn('Firebase clearEvents failed:', err);
-  }
-}
+// subscribeToEvents / appendEvent / clearEvents live in app/src/data/events.ts
+// (typed against BeaconEvent at every call-site via the generic parameter).
 
 // ============================================================================
 // BACKGROUND LOCATION TRACKING (requires EAS dev build — no-op in Expo Go)
