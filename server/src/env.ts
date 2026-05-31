@@ -15,7 +15,7 @@ const ServerEnvSchema = z
     SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
     SUPABASE_JWT_SECRET: z.string().min(1),
-    SUPABASE_DB_URL: z.string().url().optional(),
+    SUPABASE_DB_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
 
     // Gemini (server-only) — KEYS.md §2
     GEMINI_API_KEY: z.string().min(1),
@@ -52,8 +52,11 @@ const ServerEnvSchema = z
     SENTRY_DSN: z.string().optional(),
 
     // KMS — KEYS.md §11
-    KMS_PROVIDER: z.enum(['gcp', 'aws', 'azure']).optional(),
-    KMS_KEY_RESOURCE: z.string().optional(),
+    KMS_PROVIDER: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.enum(['gcp', 'aws', 'azure']).optional(),
+    ),
+    KMS_KEY_RESOURCE: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production') {
