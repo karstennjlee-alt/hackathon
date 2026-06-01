@@ -13,7 +13,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { admin } from '../supabase';
-import { ApiError } from '../http';
+import { ApiError, parseBody } from '../http';
 import { audit } from '../audit';
 
 const CoordsSchema = z.object({
@@ -55,7 +55,7 @@ export async function postActivateIncident(req: Request, res: Response): Promise
   if (role !== 'student' && role !== 'staff' && role !== 'admin') {
     throw new ApiError(403, 'FORBIDDEN', 'parents cannot activate the beacon');
   }
-  const body = ActivateBody.parse(req.body ?? {});
+  const body = parseBody(ActivateBody, req.body ?? {});
 
   // Refuse if this student already has an active incident — one at a time.
   const { data: existing, error: lookupErr } = await admin
@@ -147,7 +147,7 @@ export async function postIncidentLocation(req: Request, res: Response): Promise
   if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
     throw new ApiError(400, 'BAD_REQUEST', 'incident id is not a uuid', 'id');
   }
-  const body = LocationBody.parse(req.body);
+  const body = parseBody(LocationBody, req.body);
 
   const { data: row, error: lookupErr } = await admin
     .from('incidents')

@@ -15,7 +15,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { admin } from '../supabase';
-import { ApiError } from '../http';
+import { ApiError, parseBody } from '../http';
 import { audit } from '../audit';
 import { hasPermission } from '../rbac/permissions';
 import type { Role } from '@beacon5/shared';
@@ -31,6 +31,12 @@ const MassBody = z.object({
     .array(z.enum(['students', 'parents', 'teachers', 'everyone']))
     .min(1)
     .max(4),
+  body: z.string().min(1).max(2_000),
+  clarifiedBody: z.string().max(2_000).optional(),
+});
+
+const BroadcastBody = z.object({
+  studentUserId: z.string().uuid(),
   body: z.string().min(1).max(2_000),
   clarifiedBody: z.string().max(2_000).optional(),
 });
@@ -57,7 +63,7 @@ export async function postChatMessage(req: Request, res: Response): Promise<void
   if (!hasPermission(role, 'chat:send')) {
     throw new ApiError(403, 'FORBIDDEN', `role ${role} cannot send chat messages`);
   }
-  const body = ChatBody.parse(req.body);
+  const body = parseBody(ChatBody, req.body);
 
   // Verify the target student is actually on this campus.
   const { data: student, error: studentErr } = await admin
@@ -118,7 +124,7 @@ export async function postChatMessage(req: Request, res: Response): Promise<void
 // ─── POST /v1/messages/mass ───────────────────────────────────────
 export async function postMassMessage(req: Request, res: Response): Promise<void> {
   const { campusId, uid, role } = requireCampus(req);
-  const body = MassBody.parse(req.body);
+  const body = parseBody(MassBody, req.body);
 
   const wantsEveryone = body.audience.includes('everyone');
   const needed = wantsEveryone ? 'broadcast:send-everyone' : 'broadcast:send-staff-scoped';
@@ -149,6 +155,58 @@ export async function postMassMessage(req: Request, res: Response): Promise<void
     action: 'message.mass',
     target: inserted.id,
     metadata: { audience: body.audience },
+  });
+
+  res.status(201).json({
+    id: inserted.id,
+    at: new Date(inserted.at).getTime(),
+  });
+}
+
+// ─── POST /v1/messages/broadcast ─────────────────────────────────
+// Staff/admin all-clear or status update tied to one student's incident.
+// Schema-wise this is messages(kind='broadcast'); the v1 monolith renders
+// it as STAFF_BROADCAST with kind='all_clear'|'update'.
+export async function postBroadcastMessage(req: Request, res: Response): Promise<void> {
+  const { campusId, uid, role } = requireCampus(req);
+  if (role !== 'staff' && role !== 'admin') {
+    throw new ApiError(403, 'FORBIDDEN', `role ${role} cannot send staff broadcasts`);
+  }
+  const body = parseBody(BroadcastBody, req.body);
+
+  const { data: student, error: studentErr } = await admin
+    .from('users')
+    .select('id, campus_id')
+    .eq('id', body.studentUserId)
+    .maybeSingle();
+  if (studentErr) throw new Error(`users lookup: ${studentErr.message}`);
+  if (!student || student.campus_id !== campusId) {
+    throw new ApiError(404, 'NOT_FOUND', 'student not found on this campus');
+  }
+
+  const { data: inserted, error: insertErr } = await admin
+    .from('messages')
+    .insert({
+      campus_id: campusId,
+      kind: 'broadcast',
+      sender_user_id: uid,
+      sender_role: role,
+      student_user_id: body.studentUserId,
+      body: body.body,
+      clarified_body: body.clarifiedBody ?? null,
+    })
+    .select('id, at')
+    .single();
+  if (insertErr || !inserted) {
+    throw new Error(`messages insert: ${insertErr?.message ?? 'no row returned'}`);
+  }
+
+  await audit({
+    campusId,
+    actorUserId: uid,
+    action: 'message.broadcast',
+    target: inserted.id,
+    metadata: { studentUserId: body.studentUserId },
   });
 
   res.status(201).json({

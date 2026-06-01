@@ -917,7 +917,9 @@ export default function App() {
   const lastNotifiedNoteRef = useRef<string | null>(null);
   const lastNotifiedChatRef = useRef<string | null>(null);
   const lastNotifiedMassRef = useRef<string | null>(null);
+  const lastThreatHandledRef = useRef<string | null>(null);
   const watchSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
+  const allClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [themeMode, setThemeMode] = useState<'dark' | 'light'>('dark');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -956,6 +958,17 @@ export default function App() {
   }, []);
 
   useEffect(() => subscribeToEvents(setEvents), []);
+
+  // Clear the all-clear wipe timer on unmount so a sign-out or app close
+  // mid-window doesn't fire stale resets a few seconds later.
+  useEffect(() => {
+    return () => {
+      if (allClearTimeoutRef.current) {
+        clearTimeout(allClearTimeoutRef.current);
+        allClearTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!profile) return;
@@ -1089,21 +1102,28 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
   };
 
+  const resetAllNotifRefs = () => {
+    lastNotifiedBroadcastRef.current = null;
+    lastNotifiedIncidentRef.current = null;
+    lastNotifiedNoteRef.current = null;
+    lastNotifiedChatRef.current = null;
+    lastNotifiedMassRef.current = null;
+    lastThreatHandledRef.current = null;
+  };
+
   const onResetProfile = () => {
     setProfile(null);
     setIncident(null);
     setReports(seedReports);
     setStaffConfirmed(new Set());
-    lastNotifiedBroadcastRef.current = null;
-    lastNotifiedIncidentRef.current = null;
+    resetAllNotifRefs();
     clearProfile().catch(() => undefined);
   };
 
   const onWipeEvents = () => {
     setEvents([]);
     clearEvents().catch(() => undefined);
-    lastNotifiedBroadcastRef.current = null;
-    lastNotifiedIncidentRef.current = null;
+    resetAllNotifRefs();
   };
 
   const onAllClear = async (incidentEv: Extract<BeaconEvent, { type: 'BEACON_ACTIVATED' }>) => {
@@ -1130,18 +1150,15 @@ export default function App() {
       await appendEvent(broadcast);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       // Let the all-clear card render on every device, then wipe everything.
-      setTimeout(() => {
+      if (allClearTimeoutRef.current) clearTimeout(allClearTimeoutRef.current);
+      allClearTimeoutRef.current = setTimeout(() => {
+        allClearTimeoutRef.current = null;
         clearEvents().catch(() => undefined);
         setEvents([]);
         setIncident(null);
         setReports(seedReports);
         setStaffConfirmed(new Set());
-        lastNotifiedBroadcastRef.current = null;
-        lastNotifiedIncidentRef.current = null;
-        lastNotifiedNoteRef.current = null;
-        lastNotifiedChatRef.current = null;
-        lastNotifiedMassRef.current = null;
-        lastThreatHandledRef.current = null;
+        resetAllNotifRefs();
       }, 6000);
     } finally {
       setGeneratingBroadcast(false);
@@ -1156,7 +1173,6 @@ export default function App() {
   );
 
   const campusThreatActive = useMemo(() => isCampusThreatActive(events), [events]);
-  const lastThreatHandledRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!profile) return;

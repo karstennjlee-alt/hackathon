@@ -22,7 +22,7 @@ import {
   postIncidentLocation,
 } from './incidents/routes';
 import { postDeclareThreat, postClearThreat } from './incidents/threat';
-import { postChatMessage, postMassMessage } from './messaging/routes';
+import { postChatMessage, postMassMessage, postBroadcastMessage } from './messaging/routes';
 
 const app = createApp();
 
@@ -97,6 +97,12 @@ app.post(
   requireCampusMember,
   asyncHandler(postMassMessage),
 );
+app.post(
+  '/v1/messages/broadcast',
+  verifyToken,
+  requireCampusMember,
+  asyncHandler(postBroadcastMessage),
+);
 
 app.use(errorHandler);
 
@@ -123,6 +129,7 @@ app.listen(port, () => {
       `    POST /v1/threat/declare      (Bearer) — step-up; gated by campus.policy\n` +
       `    POST /v1/threat/clear        (Bearer) — step-up\n` +
       `    POST /v1/messages/chat       (Bearer + { studentUserId, body })\n` +
-      `    POST /v1/messages/mass       (Bearer + { audience, body })\n\n`,
+      `    POST /v1/messages/mass       (Bearer + { audience, body })\n` +
+      `    POST /v1/messages/broadcast  (Bearer + { studentUserId, body }) — staff/admin all-clear\n\n`,
   );
 });

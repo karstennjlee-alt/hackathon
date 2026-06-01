@@ -70,3 +70,11 @@ export function postMassMessage(input: {
 }): Promise<{ id: string; at: number } | null> {
   return post('/v1/messages/mass', input);
 }
+
+export function postStaffBroadcast(input: {
+  studentUserId: string;
+  body: string;
+  clarifiedBody?: string;
+}): Promise<{ id: string; at: number } | null> {
+  return post('/v1/messages/broadcast', input);
+}

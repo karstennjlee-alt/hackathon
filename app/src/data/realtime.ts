@@ -176,6 +176,10 @@ async function fromLocation(row: LocationRow): Promise<unknown | null> {
 
 let activeCampusId: string | null = null;
 let channels: Array<{ unsubscribe: () => Promise<'ok' | 'timed out' | 'error'> }> = [];
+// In-flight start/stop promise. Without this, two near-simultaneous
+// AuthContext applySession calls (e.g. token refresh racing initial mount)
+// can both pass the activeCampusId check and double-subscribe.
+let inflight: Promise<void> | null = null;
 
 type RealtimePayload<T> = { new: T };
 
@@ -188,42 +192,101 @@ async function safeMerge(event: unknown | null): Promise<void> {
   }
 }
 
-export async function startRealtimeSync(campusId: string): Promise<void> {
-  if (activeCampusId === campusId && channels.length > 0) return; // already running
-  await stopRealtimeSync();
-  activeCampusId = campusId;
-  await hydrateCampusRoster(campusId);
+// Backfill the last 24 hours of campus data so a device joining mid-event
+// can see what's already happening. Without this the local store is empty
+// until the next INSERT fires through the realtime channel.
+const BACKFILL_HOURS = 24;
 
-  const filter = `campus_id=eq.${campusId}`;
-  const tables: Array<{
-    table: 'incidents' | 'campus_threats' | 'messages' | 'location_points';
-    transform: (row: unknown) => Promise<unknown | null> | unknown | null;
-  }> = [
-    { table: 'incidents',       transform: (r) => fromIncident(r as IncidentRow) },
-    { table: 'campus_threats',  transform: (r) => fromThreat(r as ThreatRow) },
-    { table: 'messages',        transform: (r) => fromMessage(r as MessageRow) },
-    { table: 'location_points', transform: (r) => fromLocation(r as LocationRow) },
-  ];
+async function backfillCampus(campusId: string): Promise<void> {
+  const sinceIso = new Date(Date.now() - BACKFILL_HOURS * 3600 * 1000).toISOString();
+  try {
+    const [incidents, threats, messages, locations] = await Promise.all([
+      supabase
+        .from('incidents')
+        .select('id, campus_id, student_user_id, status, activated_at, last_known_coords, zone_hint')
+        .eq('campus_id', campusId)
+        .gte('activated_at', sinceIso)
+        .order('activated_at', { ascending: true }),
+      supabase
+        .from('campus_threats')
+        .select('id, campus_id, status, actor_user_id, at')
+        .eq('campus_id', campusId)
+        .gte('at', sinceIso)
+        .order('at', { ascending: true }),
+      supabase
+        .from('messages')
+        .select('id, campus_id, kind, sender_user_id, sender_role, audience, student_user_id, body, clarified_body, at')
+        .eq('campus_id', campusId)
+        .gte('at', sinceIso)
+        .order('at', { ascending: true }),
+      supabase
+        .from('location_points')
+        .select('id, campus_id, incident_id, student_user_id, coords, at')
+        .eq('campus_id', campusId)
+        .gte('at', sinceIso)
+        .order('at', { ascending: true }),
+    ]);
 
-  for (const { table, transform } of tables) {
-    const ch = supabase
-      .channel(`beacon5:${table}:${campusId}`)
-      .on(
-        'postgres_changes' as never,
-        { event: 'INSERT', schema: 'public', table, filter } as never,
-        (payload: RealtimePayload<unknown>) => {
-          void Promise.resolve(transform(payload.new)).then(safeMerge);
-        },
-      )
-      .subscribe();
-    channels.push(ch as unknown as { unsubscribe: () => Promise<'ok' | 'timed out' | 'error'> });
+    for (const row of incidents.data ?? []) await safeMerge(await fromIncident(row as IncidentRow));
+    for (const row of threats.data ?? []) await safeMerge(await fromThreat(row as ThreatRow));
+    for (const row of messages.data ?? []) await safeMerge(await fromMessage(row as MessageRow));
+    for (const row of locations.data ?? []) await safeMerge(await fromLocation(row as LocationRow));
+  } catch {
+    // Backfill failures are non-fatal — realtime takes over from here.
   }
 }
 
-export async function stopRealtimeSync(): Promise<void> {
+export async function startRealtimeSync(campusId: string): Promise<void> {
+  if (inflight) await inflight;
+  if (activeCampusId === campusId && channels.length > 0) return;
+
+  inflight = (async () => {
+    await stopRealtimeSyncInner();
+    activeCampusId = campusId;
+    await hydrateCampusRoster(campusId);
+    await backfillCampus(campusId);
+
+    const filter = `campus_id=eq.${campusId}`;
+    const tables: Array<{
+      table: 'incidents' | 'campus_threats' | 'messages' | 'location_points';
+      transform: (row: unknown) => Promise<unknown | null> | unknown | null;
+    }> = [
+      { table: 'incidents',       transform: (r) => fromIncident(r as IncidentRow) },
+      { table: 'campus_threats',  transform: (r) => fromThreat(r as ThreatRow) },
+      { table: 'messages',        transform: (r) => fromMessage(r as MessageRow) },
+      { table: 'location_points', transform: (r) => fromLocation(r as LocationRow) },
+    ];
+
+    for (const { table, transform } of tables) {
+      const ch = supabase
+        .channel(`beacon5:${table}:${campusId}`)
+        .on(
+          'postgres_changes' as never,
+          { event: 'INSERT', schema: 'public', table, filter } as never,
+          (payload: RealtimePayload<unknown>) => {
+            void Promise.resolve(transform(payload.new)).then(safeMerge);
+          },
+        )
+        .subscribe();
+      channels.push(ch as unknown as { unsubscribe: () => Promise<'ok' | 'timed out' | 'error'> });
+    }
+  })();
+  try {
+    await inflight;
+  } finally {
+    inflight = null;
+  }
+}
+
+async function stopRealtimeSyncInner(): Promise<void> {
   const old = channels;
   channels = [];
   activeCampusId = null;
   await Promise.allSettled(old.map((c) => c.unsubscribe().catch(() => undefined)));
   clearUserCache();
+}
+
+export async function stopRealtimeSync(): Promise<void> {
+  if (inflight) await inflight;
+  await stopRealtimeSyncInner();
 }
