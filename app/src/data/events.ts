@@ -1,9 +1,14 @@
 // Local event log — primary read path is AsyncStorage so the v1 monolith
 // stays snappy and demo mode keeps working without auth. When the user is
-// signed in with a real campus_id claim, every appendEvent ALSO fires a
-// background dispatch to the v2 server (best-effort, never blocks the UI
-// and never throws). That lights up the audit log + admin console reads
-// today; Supabase Realtime cross-device sync is step 7c2.
+// signed in with a real campus_id claim:
+//   - every appendEvent ALSO fires a background dispatch to the v2 server
+//     (best-effort, never blocks the UI and never throws). [step 7c1]
+//   - Supabase Realtime channels stream INSERTs from other devices back
+//     into the store via mergeRemoteEvent. [step 7c2 — see realtime.ts]
+//
+// Dedupe rule: when this device wrote a row to the server, we record the
+// returned server id in `dispatchedIds`; the realtime echo for that id is
+// skipped so the local event is not duplicated.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../supabase';
@@ -100,6 +105,43 @@ export async function appendEvent<E>(event: E): Promise<void> {
   void dispatchToServer(event);
 }
 
+// ─── remote merge (7c2) ───────────────────────────────────────────
+// Server ids we know are echoes of our own writes — skip on receipt.
+// Bounded to ~200 entries; FIFO eviction is good enough since the
+// realtime echo lands within seconds.
+const dispatchedIds = new Set<string>();
+const DISPATCHED_LRU_LIMIT = 200;
+
+export function markDispatched(serverId: string): void {
+  if (!serverId) return;
+  dispatchedIds.add(serverId);
+  if (dispatchedIds.size > DISPATCHED_LRU_LIMIT) {
+    const first = dispatchedIds.values().next().value;
+    if (first) dispatchedIds.delete(first);
+  }
+}
+
+export async function mergeRemoteEvent<E extends { id: string }>(event: E): Promise<void> {
+  if (!event || !event.id) return;
+  if (dispatchedIds.has(event.id)) return;
+  await hydrate();
+  if ((store.events as Array<{ id: string }>).some((e) => e.id === event.id)) return;
+  store.events = [...store.events, event];
+  await persist();
+  notify();
+}
+
+export function resetEventStoreForSignOut(): void {
+  // Hard reset on sign-out: drop the in-memory store + dedupe sets so
+  // a fresh sign-in starts clean. AsyncStorage stays — it's tied to the
+  // device, not the account — and re-hydrates on next subscribe.
+  dispatchedIds.clear();
+  store.events = [];
+  store.hydrated = false;
+  store.hydrating = null;
+  notify();
+}
+
 // ─── server dispatch (7c1) ────────────────────────────────────────
 // Maps a BeaconEvent to the appropriate /v1/* server route. Runs
 // only when the caller is signed in with a real campus claim. Demo
@@ -148,17 +190,20 @@ async function dispatchToServer<E>(raw: E): Promise<void> {
     switch (event.type) {
       case 'BEACON_ACTIVATED': {
         const coords = coerceCoords(event.coords);
-        await postActivateIncident({
+        const r = await postActivateIncident({
           ...(coords ? { lastKnownCoords: coords } : {}),
           ...(typeof event.zoneDescription === 'string' && event.zoneDescription
             ? { zoneHint: event.zoneDescription }
             : {}),
         });
+        if (r?.id) markDispatched(r.id);
         return;
       }
       case 'CAMPUS_THREAT': {
-        if (event.status === 'active') await postDeclareThreat();
-        else if (event.status === 'cleared') await postClearThreat();
+        let r: { id: string } | null = null;
+        if (event.status === 'active') r = await postDeclareThreat();
+        else if (event.status === 'cleared') r = await postClearThreat();
+        if (r?.id) markDispatched(r.id);
         return;
       }
       case 'CHAT_MESSAGE': {
@@ -167,19 +212,21 @@ async function dispatchToServer<E>(raw: E): Promise<void> {
           typeof event.message !== 'string' ||
           !event.message.trim()
         ) return;
-        await postChatMessage({
+        const r = await postChatMessage({
           studentUserId: event.studentId,
           body: event.message,
         });
+        if (r?.id) markDispatched(r.id);
         return;
       }
       case 'MASS_BROADCAST': {
         if (typeof event.message !== 'string' || !event.message.trim()) return;
         const aud = (event.audience ?? 'everyone') as V1Audience;
-        await postMassMessage({
+        const r = await postMassMessage({
           audience: normalizeAudience(aud),
           body: event.message,
         });
+        if (r?.id) markDispatched(r.id);
         return;
       }
       // BEACON_RESET, INCIDENT_NOTE, LOCATION_UPDATE, STAFF_BROADCAST:

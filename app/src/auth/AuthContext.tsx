@@ -7,6 +7,8 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import type { Session, User as SupaUser } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
 import { env } from '../env';
+import { startRealtimeSync, stopRealtimeSync } from '../data/realtime';
+import { resetEventStoreForSignOut } from '../data/events';
 
 type Role = 'student' | 'parent' | 'staff' | 'admin';
 
@@ -74,13 +76,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     setSession(s);
     if (!s?.access_token) {
       setBeacon(null);
+      // Sign-out path: tear down realtime + wipe in-memory event store
+      // so the next user doesn't see the previous one's data.
+      void stopRealtimeSync();
+      resetEventStoreForSignOut();
       return;
     }
     try {
       const b = await fetchBeaconSession(s.access_token);
       setBeacon(b);
       // Refresh the local JWT so the new app_metadata claims are picked up.
-      if (b?.campusId) await supabase.auth.refreshSession();
+      if (b?.campusId) {
+        await supabase.auth.refreshSession();
+        void startRealtimeSync(b.campusId);
+      } else {
+        void stopRealtimeSync();
+      }
     } catch (err) {
       // Log but don't blow up the tree — the SignInScreen will show "needs join" state.
       console.warn('[auth] fetchBeaconSession failed:', err);
