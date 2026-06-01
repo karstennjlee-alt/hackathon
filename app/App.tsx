@@ -955,17 +955,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    const unsubscribe = subscribeToEvents(setEvents);
-    flushPendingEvents().catch(() => undefined);
-    const retryId = setInterval(() => {
-      flushPendingEvents().catch(() => undefined);
-    }, 8000);
-    return () => {
-      unsubscribe();
-      clearInterval(retryId);
-    };
-  }, []);
+  useEffect(() => subscribeToEvents(setEvents), []);
 
   useEffect(() => {
     if (!profile) return;
@@ -1503,7 +1493,12 @@ export default function App() {
           themeMode={themeMode}
         />
         {showCampusBanner ? (
-          <View style={styles.campusBanner}>
+          <View
+            style={styles.campusBanner}
+            accessibilityRole="alert"
+            accessibilityLiveRegion="assertive"
+            accessibilityLabel={`Campus threat active, tracking all students, declared by ${latestThreat!.actorName.split(' ').slice(-1)[0]}`}
+          >
             <AlertTriangle color="#fff" size={18} strokeWidth={3} />
             <Text style={styles.campusBannerText}>CAMPUS THREAT ACTIVE — TRACKING ALL STUDENTS</Text>
             <Text style={styles.campusBannerBy}>{latestThreat!.actorName.split(' ').slice(-1)[0]}</Text>
@@ -1607,8 +1602,8 @@ function SettingsSheet({
       <Pressable style={styles.pwModalBackdrop} onPress={onClose}>
         <Pressable style={styles.pwModalCard} onPress={() => undefined}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={styles.pwModalTitle}>Settings</Text>
-            <Pressable onPress={onClose} hitSlop={12}>
+            <Text style={styles.pwModalTitle} accessibilityRole="header">Settings</Text>
+            <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close settings">
               <X color="#f4f4f5" size={20} />
             </Pressable>
           </View>
@@ -1617,6 +1612,9 @@ function SettingsSheet({
             <Text style={styles.settingsRowLabel}>Appearance</Text>
             <Pressable
               onPress={() => onChangeTheme('dark')}
+              accessibilityRole="radio"
+              accessibilityLabel="Dark appearance"
+              accessibilityState={{ selected: themeMode === 'dark' }}
               style={[styles.themeChip, themeMode === 'dark' ? styles.themeChipActive : styles.themeChipInactive]}
             >
               <Text style={[styles.themeChipText, { color: themeMode === 'dark' ? '#7dd3fc' : '#a1a1aa' }]}>
@@ -1625,6 +1623,9 @@ function SettingsSheet({
             </Pressable>
             <Pressable
               onPress={() => onChangeTheme('light')}
+              accessibilityRole="radio"
+              accessibilityLabel="Light appearance"
+              accessibilityState={{ selected: themeMode === 'light' }}
               style={[styles.themeChip, themeMode === 'light' ? styles.themeChipActive : styles.themeChipInactive]}
             >
               <Text style={[styles.themeChipText, { color: themeMode === 'light' ? '#7dd3fc' : '#a1a1aa' }]}>
@@ -1633,12 +1634,12 @@ function SettingsSheet({
             </Pressable>
           </View>
 
-          <Pressable onPress={onWipeEvents} style={styles.settingsRow}>
+          <Pressable onPress={onWipeEvents} style={styles.settingsRow} accessibilityRole="button" accessibilityLabel="Reset demo events">
             <RefreshCcw color="#a1a1aa" size={16} />
             <Text style={styles.settingsRowLabel}>Reset demo events</Text>
           </Pressable>
 
-          <Pressable onPress={onSignOut} style={styles.settingsRow}>
+          <Pressable onPress={onSignOut} style={styles.settingsRow} accessibilityRole="button" accessibilityLabel="Sign out">
             <LogOut color="#fb7185" size={16} />
             <Text style={[styles.settingsRowLabel, { color: '#fb7185' }]}>Sign out</Text>
           </Pressable>
@@ -1703,13 +1704,21 @@ function ThreatPasswordModal({
             autoFocus
             style={styles.pwInput}
             onSubmitEditing={submit}
+            accessibilityLabel="Principal password"
           />
-          {error ? <Text style={styles.pwError}>{error}</Text> : null}
+          {error ? <Text style={styles.pwError} accessibilityLiveRegion="polite" accessibilityRole="alert">{error}</Text> : null}
           <View style={styles.pwActions}>
-            <Pressable onPress={onClose} style={styles.pwCancel}>
+            <Pressable onPress={onClose} style={styles.pwCancel} accessibilityRole="button" accessibilityLabel="Cancel">
               <Text style={styles.pwCancelText}>Cancel</Text>
             </Pressable>
-            <Pressable onPress={submit} disabled={busy} style={styles.pwConfirm}>
+            <Pressable
+              onPress={submit}
+              disabled={busy}
+              style={styles.pwConfirm}
+              accessibilityRole="button"
+              accessibilityLabel={threatActive ? 'Confirm clear threat' : 'Confirm declare threat'}
+              accessibilityState={{ disabled: busy, busy }}
+            >
               <Text style={styles.pwConfirmText}>
                 {busy ? '...' : threatActive ? 'Clear threat' : 'Declare threat'}
               </Text>
@@ -1843,6 +1852,9 @@ function RoleCard({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityHint={subtitle}
       style={({ pressed }) => [
         styles.roleCard,
         { borderColor: `${color}66` },
@@ -1881,13 +1893,18 @@ function RosterPicker({
 }) {
   return (
     <ScrollView contentContainerStyle={styles.onboardScroll} showsVerticalScrollIndicator={false}>
-      <Pressable onPress={onBack} style={({ pressed }) => [styles.backRow, pressed && styles.pressed]}>
+      <Pressable
+        onPress={onBack}
+        accessibilityRole="button"
+        accessibilityLabel="Back"
+        style={({ pressed }) => [styles.backRow, pressed && styles.pressed]}
+      >
         <ChevronRight color="#9ca3af" size={16} style={{ transform: [{ rotate: '180deg' }] }} />
         <Text style={styles.backText}>Back</Text>
       </Pressable>
 
       <View style={styles.onboardHero}>
-        <Text style={styles.onboardTitle}>{title}</Text>
+        <Text style={styles.onboardTitle} accessibilityRole="header">{title}</Text>
         <Text style={styles.onboardCopy}>{subtitle}</Text>
       </View>
 
@@ -1982,7 +1999,8 @@ function Header({
               isLight && { borderColor: 'rgba(15,23,42,0.24)', backgroundColor: 'rgba(15,23,42,0.04)' },
               pressed && styles.pressed,
             ]}
-            accessibilityLabel="Settings"
+            accessibilityRole="button"
+            accessibilityLabel="Open settings"
           >
             <SettingsIcon color={isLight ? '#0f172a' : '#cfc4c5'} size={16} />
           </Pressable>
@@ -2225,6 +2243,10 @@ function HoldToActivate({ onComplete }: { onComplete: () => void }) {
       <Pressable
         onPressIn={startHold}
         onPressOut={cancelHold}
+        accessibilityRole="button"
+        accessibilityLabel="Hold to activate emergency beacon"
+        accessibilityHint="Press and hold for one second to alert campus staff and your guardian"
+        accessibilityState={{ busy: holding }}
         style={({ pressed }) => [
           styles.holdButton,
           {
@@ -2325,7 +2347,13 @@ function SurvivalAnchor({
         />
       </View>
 
-      <Pressable style={styles.resetGhost} onPress={onReset}>
+      <Pressable
+        style={styles.resetGhost}
+        onPress={onReset}
+        accessibilityRole="button"
+        accessibilityLabel="All clear, reset beacon"
+        accessibilityHint="Clears your active emergency beacon"
+      >
         <Text style={styles.resetGhostText}>All clear - reset beacon</Text>
       </Pressable>
     </ScrollView>
@@ -2351,7 +2379,12 @@ function BroadcastCard({
 }) {
   const accent = broadcast.kind === 'all_clear' ? '#22c55e' : '#7dd3fc';
   return (
-    <View style={[styles.broadcastCard, { borderColor: `${accent}66`, backgroundColor: `${accent}14` }]}>
+    <View
+      style={[styles.broadcastCard, { borderColor: `${accent}66`, backgroundColor: `${accent}14` }]}
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={`${broadcast.kind === 'all_clear' ? 'All clear, staff update' : 'Staff update'}: ${broadcast.message}`}
+    >
       <View style={[styles.broadcastBadge, { backgroundColor: `${accent}33`, borderColor: `${accent}88` }]}>
         <Sparkles color={accent} size={18} />
       </View>
@@ -2640,10 +2673,14 @@ function ChatPanel({
               style={styles.chatInput}
               multiline
               maxLength={400}
+              accessibilityLabel={`Message to ${peerLabel.toLowerCase()}`}
             />
             <Pressable
               onPress={send}
               disabled={!draft.trim()}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{ disabled: !draft.trim() }}
               style={({ pressed }) => [
                 styles.chatSendButton,
                 { opacity: draft.trim() ? 1 : 0.4 },
@@ -2748,6 +2785,9 @@ function MassComposer({
             <Pressable
               key={a.key}
               onPress={() => togglePill(a.key)}
+              accessibilityRole="checkbox"
+              accessibilityLabel={`Send to ${a.label.toLowerCase()}`}
+              accessibilityState={{ checked: on }}
               style={({ pressed }) => [
                 styles.massAudienceChip,
                 on
@@ -2773,6 +2813,9 @@ function MassComposer({
         <Pressable
           key="everyone"
           onPress={toggleEveryone}
+          accessibilityRole="checkbox"
+          accessibilityLabel="Send to everyone"
+          accessibilityState={{ checked: everyoneOn }}
           style={({ pressed }) => [
             styles.massAudienceChip,
             everyoneOn
@@ -2811,10 +2854,14 @@ function MassComposer({
           style={styles.chatInput}
           multiline
           maxLength={400}
+          accessibilityLabel="Campus-wide broadcast message"
         />
         <Pressable
           onPress={send}
           disabled={!draft.trim() || sending || selected.size === 0}
+          accessibilityRole="button"
+          accessibilityLabel={sending ? 'Sending broadcast' : 'Send campus-wide broadcast'}
+          accessibilityState={{ disabled: !draft.trim() || sending || selected.size === 0, busy: sending }}
           style={({ pressed }) => {
             const canSend = draft.trim() && !sending && selected.size > 0;
             return [
@@ -3013,6 +3060,9 @@ function EscalationChip({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}${flagged ? ', reported' : ''}`}
+      accessibilityState={{ selected: flagged }}
       style={({ pressed }) => [
         styles.escalChip,
         {
@@ -3131,6 +3181,13 @@ function StaffMode({
     >
       <Pressable
         onPress={onOpenThreatModal}
+        accessibilityRole="button"
+        accessibilityLabel={campusThreatActive ? 'Clear campus threat' : 'Declare campus threat'}
+        accessibilityHint={
+          campusThreatActive
+            ? 'Stops live student tracking after principal password confirmation'
+            : 'Starts live student tracking after principal password confirmation'
+        }
         style={({ pressed }) => [
           styles.threatBigButton,
           campusThreatActive && styles.threatBigButtonActive,
@@ -3882,7 +3939,14 @@ function ModeNav({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => voi
         const active = mode === item.mode;
         const Icon = item.icon;
         return (
-          <Pressable key={item.mode} onPress={() => onChange(item.mode)} style={styles.modeItem}>
+          <Pressable
+            key={item.mode}
+            onPress={() => onChange(item.mode)}
+            accessibilityRole="tab"
+            accessibilityLabel={`${item.label} view`}
+            accessibilityState={{ selected: active }}
+            style={styles.modeItem}
+          >
             <View style={[styles.modeIconShell, active && styles.modeIconActive]}>
               <Icon color={active ? '#ffffff' : '#8f8f93'} size={22} />
             </View>
@@ -3989,6 +4053,8 @@ function EscalationSheet({
             <Pressable
               onPress={onClose}
               hitSlop={16}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
               style={({ pressed }) => [styles.fullSheetClose, pressed && styles.pressed]}
             >
               <X color="#f4f4f5" size={22} strokeWidth={2.4} />
@@ -4002,7 +4068,7 @@ function EscalationSheet({
               >
                 <Icon color={accent} size={20} />
               </View>
-              <Text style={styles.fullSheetTitle}>
+              <Text style={styles.fullSheetTitle} accessibilityRole="header">
                 {isThreat ? 'I see a threat' : 'Medical needed'}
               </Text>
             </View>
@@ -4026,6 +4092,9 @@ function EscalationSheet({
                   <Pressable
                     key={p}
                     onPress={() => togglePreset(p)}
+                    accessibilityRole="checkbox"
+                    accessibilityLabel={p}
+                    accessibilityState={{ checked: on }}
                     style={({ pressed }) => [
                       styles.presetTile,
                       {
@@ -4053,6 +4122,7 @@ function EscalationSheet({
               autoCorrect
               returnKeyType="done"
               blurOnSubmit
+              accessibilityLabel="Additional note for staff"
             />
 
             {combinedNote ? (
@@ -4067,6 +4137,9 @@ function EscalationSheet({
             <Pressable
               onPress={submit}
               disabled={!canSubmit}
+              accessibilityRole="button"
+              accessibilityLabel={submitting ? 'Sending' : 'Share with staff and guardian'}
+              accessibilityState={{ disabled: !canSubmit, busy: submitting }}
               style={({ pressed }) => [
                 styles.fullSheetSubmit,
                 { backgroundColor: accent, opacity: canSubmit ? 1 : 0.4 },
