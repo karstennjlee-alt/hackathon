@@ -8,7 +8,7 @@ import type { Session, User as SupaUser } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
 import { env } from '../env';
 import { startRealtimeSync, stopRealtimeSync } from '../data/realtime';
-import { resetEventStoreForSignOut } from '../data/events';
+import { resetEventStoreForSignOut, setStorageScope } from '../data/events';
 
 type Role = 'student' | 'parent' | 'staff' | 'admin';
 
@@ -77,14 +77,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     if (!s?.access_token) {
       setBeacon(null);
       // Sign-out path: tear down realtime + wipe in-memory event store
-      // so the next user doesn't see the previous one's data.
+      // so the next user doesn't see the previous one's data. Also
+      // flip the AsyncStorage bucket back to the shared demo key so
+      // demo mode cross-profile flow keeps working.
       void stopRealtimeSync();
       resetEventStoreForSignOut();
+      setStorageScope(null);
       return;
     }
     try {
       const b = await fetchBeaconSession(s.access_token);
       setBeacon(b);
+      // Per-user AsyncStorage bucket. If the user has a real campus we
+      // key by uid so two people sharing the phone don't see each other's
+      // events; if they're still pre-join, scope by auth sub so even the
+      // half-finished session doesn't leak into the demo bucket.
+      const scope = b?.uid || s.user?.id || null;
+      setStorageScope(scope);
       // Refresh the local JWT so the new app_metadata claims are picked up.
       if (b?.campusId) {
         await supabase.auth.refreshSession();

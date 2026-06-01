@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 import type { Request, Response } from 'express';
-import { ApiError } from '../http';
+import { parseBody } from '../http';
 import { runPrompt } from './provider';
 import {
   clarifyAlertPrompt,
@@ -40,35 +40,26 @@ const PolishBody = z.object({
   audience: z.enum(['students', 'parents', 'staff', 'everyone']),
 });
 
-function parse<T>(schema: z.ZodSchema<T>, body: unknown): T {
-  const r = schema.safeParse(body);
-  if (!r.success) {
-    const first = r.error.errors[0];
-    throw new ApiError(400, 'VALIDATION', first?.message ?? 'invalid body', first?.path.join('.'));
-  }
-  return r.data;
-}
-
 export async function postClarifyAlert(req: Request, res: Response): Promise<void> {
-  const body = parse(ClarifyBody, req.body);
+  const body = parseBody(ClarifyBody, req.body);
   const outcome = await runPrompt(clarifyAlertPrompt(body));
   res.json(outcome);
 }
 
 export async function postBrief(req: Request, res: Response): Promise<void> {
-  const body = parse(BriefBody, req.body);
+  const body = parseBody(BriefBody, req.body);
   const outcome = await runPrompt(briefPrompt(body));
   res.json(outcome);
 }
 
 export async function postAllClear(req: Request, res: Response): Promise<void> {
-  const body = parse(AllClearBody, req.body);
+  const body = parseBody(AllClearBody, req.body);
   const outcome = await runPrompt(allClearPrompt(body));
   res.json(outcome);
 }
 
 export async function postPolishBroadcast(req: Request, res: Response): Promise<void> {
-  const body = parse(PolishBody, req.body);
+  const body = parseBody(PolishBody, req.body);
   const outcome = await runPrompt(polishBroadcastPrompt(body));
   res.json(outcome);
 }

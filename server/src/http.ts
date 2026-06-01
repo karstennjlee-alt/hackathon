@@ -7,6 +7,7 @@ import express, {
   type NextFunction,
   type RequestHandler,
 } from 'express';
+import type { z } from 'zod';
 
 export class ApiError extends Error {
   constructor(
@@ -17,6 +18,20 @@ export class ApiError extends Error {
   ) {
     super(message);
   }
+}
+
+// Validates `body` against `schema` and converts a Zod failure into a clean
+// 400 with the first error's path + message, instead of letting the raw
+// ZodError bubble up to a 500. The generic `S extends z.ZodTypeAny` with
+// `z.infer<S>` preserves `.default()` / `.optional()` refinements that a
+// `z.ZodSchema<T>` signature would erase.
+export function parseBody<S extends z.ZodTypeAny>(schema: S, body: unknown): z.infer<S> {
+  const r = schema.safeParse(body);
+  if (!r.success) {
+    const first = r.error.errors[0];
+    throw new ApiError(400, 'VALIDATION', first?.message ?? 'invalid body', first?.path.join('.'));
+  }
+  return r.data;
 }
 
 // Wraps async route handlers so thrown errors hit the error middleware

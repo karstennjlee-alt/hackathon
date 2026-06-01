@@ -18,10 +18,17 @@ import {
   postClearThreat,
   postDeclareThreat,
   postMassMessage,
+  postStaffBroadcast,
 } from './server';
 
-const EVENTS_KEY = 'beacon5.events.v1';
+// Demo mode (no auth) shares one bucket on the device so the v1 multi-profile
+// flow (one device flipping between Student → Staff → Parent) still sees a
+// shared event log. When the user signs in to a real campus, we scope to
+// the auth UID so two people sharing a phone don't see each other's data.
+const DEMO_EVENTS_KEY = 'beacon5.events.v1';
 const MAX_EVENTS = 500;
+
+let storageKey = DEMO_EVENTS_KEY;
 
 type Listener<E> = (events: E[]) => void;
 
@@ -47,9 +54,13 @@ const store: Store<unknown> = {
 async function hydrate(): Promise<void> {
   if (store.hydrated) return;
   if (store.hydrating) return store.hydrating;
+  const keyAtStart = storageKey;
   store.hydrating = (async () => {
     try {
-      const raw = await AsyncStorage.getItem(EVENTS_KEY);
+      const raw = await AsyncStorage.getItem(keyAtStart);
+      // If the scope changed while we were reading (e.g. sign-in mid-hydrate),
+      // discard the read — the new hydrate cycle will pull the right bucket.
+      if (keyAtStart !== storageKey) return;
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) store.events = parsed;
@@ -57,7 +68,10 @@ async function hydrate(): Promise<void> {
     } catch {
       // corrupted store — start fresh
     }
-    store.hydrated = true;
+    if (keyAtStart === storageKey) {
+      store.hydrated = true;
+      notify();
+    }
   })();
   return store.hydrating;
 }
@@ -66,13 +80,30 @@ async function persist(): Promise<void> {
   try {
     const trimmed = store.events.slice(-MAX_EVENTS);
     if (trimmed.length === 0) {
-      await AsyncStorage.removeItem(EVENTS_KEY);
+      await AsyncStorage.removeItem(storageKey);
     } else {
-      await AsyncStorage.setItem(EVENTS_KEY, JSON.stringify(trimmed));
+      await AsyncStorage.setItem(storageKey, JSON.stringify(trimmed));
     }
   } catch {
     // best effort
   }
+}
+
+// Called from AuthContext when a real auth session lands (or goes away).
+// `userId === null` falls back to the shared demo bucket.
+export function setStorageScope(userId: string | null): void {
+  const nextKey = userId ? `beacon5.events.user.${userId}` : DEMO_EVENTS_KEY;
+  if (nextKey === storageKey) return;
+  storageKey = nextKey;
+  // Drop the in-memory store; the next subscribe-or-append will hydrate
+  // from the new bucket. Don't touch the previous bucket on disk — it
+  // belongs to the previous account and will be there when they return.
+  dispatchedIds.clear();
+  store.events = [];
+  store.hydrated = false;
+  store.hydrating = null;
+  notify();
+  void hydrate();
 }
 
 function notify(): void {
@@ -87,9 +118,14 @@ function notify(): void {
 
 export function subscribeToEvents<E>(onEvents: (events: E[]) => void): () => void {
   store.listeners.add(onEvents as Listener<unknown>);
-  hydrate().then(() => {
+  if (store.hydrated) {
+    // Hand the current state over once so the caller renders synchronously.
+    // If we're mid-hydrate or unstarted, hydrate()'s notify will fire it
+    // through the listener set instead.
     onEvents(store.events as E[]);
-  });
+  } else {
+    void hydrate();
+  }
   return () => {
     store.listeners.delete(onEvents as Listener<unknown>);
   };
@@ -229,10 +265,22 @@ async function dispatchToServer<E>(raw: E): Promise<void> {
         if (r?.id) markDispatched(r.id);
         return;
       }
-      // BEACON_RESET, INCIDENT_NOTE, LOCATION_UPDATE, STAFF_BROADCAST:
-      // no direct server route in 7c1 — the local log is enough for the
-      // monolith. LOCATION_UPDATE + STAFF_BROADCAST require server
-      // incident-id lookup that lands in 7c2.
+      case 'STAFF_BROADCAST': {
+        if (
+          typeof event.studentId !== 'string' ||
+          typeof event.message !== 'string' ||
+          !event.message.trim()
+        ) return;
+        const r = await postStaffBroadcast({
+          studentUserId: event.studentId,
+          body: event.message,
+        });
+        if (r?.id) markDispatched(r.id);
+        return;
+      }
+      // BEACON_RESET, INCIDENT_NOTE, LOCATION_UPDATE: still local-only.
+      // LOCATION_UPDATE needs the server incident-id mapping that we don't
+      // track yet; BEACON_RESET + INCIDENT_NOTE have no server analogue.
       default:
         return;
     }
