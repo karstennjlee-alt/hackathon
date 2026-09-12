@@ -16,6 +16,7 @@ export interface BeaconSession {
   uid: string;
   campusId: string | null;
   campusName: string | null;
+  campusCode: string | null;
   role: Role | null;
   displayName: string | null;
   isMinor: boolean;
@@ -49,6 +50,7 @@ async function fetchBeaconSession(jwt: string): Promise<BeaconSession | null> {
       uid: '',
       campusId: null,
       campusName: null,
+      campusCode: null,
       role: null,
       displayName: null,
       isMinor: false,
@@ -63,6 +65,7 @@ async function fetchBeaconSession(jwt: string): Promise<BeaconSession | null> {
     uid: string;
     campusId: string;
     campusName: string;
+    campusCode: string;
     role: Role;
     displayName: string;
     isMinor: boolean;

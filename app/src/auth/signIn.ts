@@ -14,6 +14,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
 import { Platform } from 'react-native';
 import { supabase } from '../supabase';
+import { env } from '../env';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -156,6 +157,29 @@ export async function signInWithPassword(email: string, password: string): Promi
   if (!password) throw new SignInError('PASSWORD_REQUIRED', 'enter your password');
   const { error } = await supabase.auth.signInWithPassword({ email: trimmed, password });
   if (error) throw new SignInError('PASSWORD_REJECT', error.message);
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Student ID sign-in — campus code + student ID + PIN.
+// The server checks the PIN and returns a one-shot token hash; we
+// exchange it for a normal Supabase session so nothing downstream
+// knows the difference.
+// ──────────────────────────────────────────────────────────────────
+export async function signInAsStudent(campusCode: string, studentId: string, pin: string): Promise<void> {
+  const res = await fetch(`${env.EXPO_PUBLIC_API_BASE_URL}/v1/auth/student-login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ campusCode: campusCode.trim(), studentId: studentId.trim(), pin: pin.trim() }),
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    tokenHash?: string;
+    error?: { code?: string; message?: string };
+  };
+  if (!res.ok || !json.tokenHash) {
+    throw new SignInError(json.error?.code ?? `HTTP_${res.status}`, json.error?.message ?? 'Sign-in failed');
+  }
+  const { error } = await supabase.auth.verifyOtp({ token_hash: json.tokenHash, type: 'magiclink' });
+  if (error) throw new SignInError('STUDENT_EXCHANGE', error.message);
 }
 
 // ──────────────────────────────────────────────────────────────────

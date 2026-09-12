@@ -23,7 +23,7 @@ function buildIdentity(b: BeaconSession, linkedStudentName: string | null): AppI
   if (!b.campusId || !b.role) return null;
   const campusName = b.campusName ?? 'Campus';
   const name = b.displayName ?? 'Campus member';
-  const base = { campusName, signOut: () => void signOut() };
+  const base = { campusName, campusCode: b.campusCode ?? undefined, signOut: () => void signOut() };
   switch (b.role) {
     case 'student':
       return { ...base, profile: { role: 'student', studentId: b.uid, studentName: name } };

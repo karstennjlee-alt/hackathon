@@ -296,6 +296,8 @@ type Profile =
 export type AppIdentity = {
   profile: Profile;
   campusName: string;
+  // Short code students type at sign-in. Shown to staff so they can hand it out.
+  campusCode?: string;
   signOut: () => void;
 };
 
@@ -1528,6 +1530,7 @@ export default function App({ identity = null }: { identity?: AppIdentity | null
           locationToken={mode === 'parent' && parentActiveIncident ? 'active' : locationToken}
           profile={profile}
           campusName={identity?.campusName}
+          campusCode={identity?.campusCode}
           onSignOut={onResetProfile}
           notifPermitted={notifPermitted}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -1986,6 +1989,7 @@ function Header({
   locationToken,
   profile,
   campusName,
+  campusCode,
   onSignOut,
   onOpenSettings,
   themeMode,
@@ -1994,6 +1998,7 @@ function Header({
   locationToken: LocationToken;
   profile: Profile;
   campusName?: string;
+  campusCode?: string;
   onSignOut: () => void;
   notifPermitted?: boolean;
   onOpenSettings?: () => void;
@@ -2011,7 +2016,7 @@ function Header({
     mode === 'student'
       ? `Campus Grid - ${campusName ?? 'San Jose High'}`
       : mode === 'staff'
-        ? 'Mission Control - Live'
+        ? `Mission Control - Live${campusCode ? ` · Campus code ${campusCode}` : ''}`
         : 'Parent Verification Secure';
 
   const tokenColor = locationToken === 'active' ? '#fb7185' : '#8ee7ff';

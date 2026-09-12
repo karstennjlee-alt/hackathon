@@ -18,9 +18,9 @@ import {
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
-import { ShieldAlert, Mail, KeyRound } from 'lucide-react-native';
+import { ShieldAlert, Mail, KeyRound, GraduationCap, Users, Hash, School } from 'lucide-react-native';
 import * as AppleAuthentication from 'expo-apple-authentication';
-import { sendEmailMagicLink, signInWithApple, signInWithGoogle, signInWithPassword, SignInError } from './signIn';
+import { sendEmailMagicLink, signInWithApple, signInWithGoogle, signInWithPassword, signInAsStudent, SignInError } from './signIn';
 
 function GoogleLogo({ size = 20 }: { size?: number }): React.JSX.Element {
   return (
@@ -45,17 +45,35 @@ function GoogleLogo({ size = 20 }: { size?: number }): React.JSX.Element {
   );
 }
 
+type Who = 'student' | 'adult';
+
 type Status =
   | { kind: 'idle' }
-  | { kind: 'busy'; provider: 'apple' | 'google' | 'email' }
+  | { kind: 'busy'; provider: 'apple' | 'google' | 'email' | 'student' }
   | { kind: 'sent'; email: string }
   | { kind: 'error'; message: string };
 
 export function SignInScreen({ campusName }: { campusName?: string }): React.JSX.Element {
+  // Students (minors, mostly no email) sign in with campus code + student
+  // ID + PIN. Everyone else uses an identity provider or email.
+  const [who, setWho] = useState<Who>('student');
+  const [campusCode, setCampusCode] = useState('');
+  const [studentId, setStudentId] = useState('');
+  const [pin, setPin] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [usePassword, setUsePassword] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+
+  async function studentSubmit(): Promise<void> {
+    setStatus({ kind: 'busy', provider: 'student' });
+    try {
+      await signInAsStudent(campusCode, studentId, pin);
+      setStatus({ kind: 'idle' });
+    } catch (err) {
+      setStatus({ kind: 'error', message: describeStudentError(err) });
+    }
+  }
 
   async function run(provider: 'apple' | 'google'): Promise<void> {
     setStatus({ kind: 'busy', provider });
@@ -89,6 +107,7 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
 
   const busy = status.kind === 'busy';
   const busyProvider = status.kind === 'busy' ? status.provider : null;
+  const studentReady = campusCode.replace(/[\s-]/g, '').length >= 3 && studentId.trim().length > 0 && /^\d{4,8}$/.test(pin);
 
   return (
     <View style={styles.root}>
@@ -114,105 +133,190 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
           )}
         </View>
 
-        <BlurView intensity={28} tint="dark" style={styles.panel}>
-          <View style={styles.panelInner}>
-            {Platform.OS === 'ios' ? (
-              <AppleAuthentication.AppleAuthenticationButton
-                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
-                cornerRadius={14}
-                style={styles.appleBtn}
-                onPress={() => void run('apple')}
-              />
-            ) : null}
-            <ProviderButton
-              label="Sign in with Google"
-              icon={<GoogleLogo size={20} />}
-              onPress={() => void run('google')}
-              disabled={busy}
-              busy={busyProvider === 'google'}
-              accessibilityLabel="Sign in with Google"
-              variant="dark"
-            />
+        <View style={styles.segment} accessibilityRole="tablist">
+          <SegmentButton
+            icon={<GraduationCap size={16} color={who === 'student' ? '#0a0a0b' : '#a1a1aa'} strokeWidth={2.5} />}
+            label="Student"
+            active={who === 'student'}
+            onPress={() => { setWho('student'); setStatus({ kind: 'idle' }); }}
+          />
+          <SegmentButton
+            icon={<Users size={16} color={who === 'adult' ? '#0a0a0b' : '#a1a1aa'} strokeWidth={2.5} />}
+            label="Staff & family"
+            active={who === 'adult'}
+            onPress={() => { setWho('adult'); setStatus({ kind: 'idle' }); }}
+          />
+        </View>
 
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>OR</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            <View style={styles.emailRow}>
-              <Mail size={18} color="#7d7d83" strokeWidth={2.5} style={styles.emailIcon} />
-              <TextInput
-                style={styles.email}
-                placeholder="you@school.org"
-                placeholderTextColor="#7d7d83"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                textContentType="emailAddress"
-                accessibilityLabel="Email address"
-                value={email}
-                onChangeText={setEmail}
-                editable={!busy && status.kind !== 'sent'}
-                returnKeyType={usePassword ? 'next' : 'send'}
-                onSubmitEditing={() => (usePassword ? undefined : void emailSubmit())}
-              />
-            </View>
-            {usePassword ? (
+        {who === 'student' ? (
+          <BlurView intensity={28} tint="dark" style={styles.panel}>
+            <View style={styles.panelInner}>
+              <Text style={styles.panelHint}>Use the campus code and PIN your school gave you.</Text>
+              <View style={styles.emailRow}>
+                <School size={18} color="#7d7d83" strokeWidth={2.5} style={styles.emailIcon} />
+                <TextInput
+                  style={[styles.email, styles.mono]}
+                  placeholder="Campus code"
+                  placeholderTextColor="#7d7d83"
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  accessibilityLabel="Campus code"
+                  value={campusCode}
+                  onChangeText={(t) => setCampusCode(t.toUpperCase())}
+                  editable={!busy}
+                  returnKeyType="next"
+                />
+              </View>
+              <View style={styles.emailRow}>
+                <Hash size={18} color="#7d7d83" strokeWidth={2.5} style={styles.emailIcon} />
+                <TextInput
+                  style={styles.email}
+                  placeholder="Student ID"
+                  placeholderTextColor="#7d7d83"
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  accessibilityLabel="Student ID"
+                  value={studentId}
+                  onChangeText={setStudentId}
+                  editable={!busy}
+                  returnKeyType="next"
+                />
+              </View>
               <View style={styles.emailRow}>
                 <KeyRound size={18} color="#7d7d83" strokeWidth={2.5} style={styles.emailIcon} />
                 <TextInput
-                  style={styles.email}
-                  placeholder="Password"
+                  style={[styles.email, styles.mono]}
+                  placeholder="PIN"
                   placeholderTextColor="#7d7d83"
                   secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  textContentType="password"
-                  accessibilityLabel="Password"
-                  value={password}
-                  onChangeText={setPassword}
+                  keyboardType="number-pad"
+                  textContentType="oneTimeCode"
+                  maxLength={8}
+                  accessibilityLabel="PIN"
+                  value={pin}
+                  onChangeText={(t) => setPin(t.replace(/\D/g, ''))}
                   editable={!busy}
                   returnKeyType="go"
-                  onSubmitEditing={() => void emailSubmit()}
+                  onSubmitEditing={() => { if (studentReady) void studentSubmit(); }}
                 />
               </View>
-            ) : null}
-            <ProviderButton
-              label={usePassword ? 'Sign in' : 'Send magic link'}
-              onPress={() => void emailSubmit()}
-              disabled={busy || !email.includes('@') || status.kind === 'sent' || (usePassword && !password)}
-              busy={busyProvider === 'email'}
-              accessibilityLabel={usePassword ? 'Sign in with email and password' : 'Send magic link to email'}
-              variant="primary"
-            />
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                setUsePassword((v) => !v);
-                setStatus({ kind: 'idle' });
-              }}
-              disabled={busy}
-              style={({ pressed }) => ({ alignSelf: 'center', paddingVertical: 4, opacity: pressed ? 0.6 : 1 })}
-            >
-              <Text style={styles.dividerText}>
-                {usePassword ? 'USE A MAGIC LINK INSTEAD' : 'USE A PASSWORD INSTEAD'}
-              </Text>
-            </Pressable>
+              <ProviderButton
+                label="Sign in"
+                onPress={() => void studentSubmit()}
+                disabled={busy || !studentReady}
+                busy={busyProvider === 'student'}
+                accessibilityLabel="Sign in as a student"
+                variant="primary"
+              />
+              {status.kind === 'error' ? (
+                <Text style={styles.error} accessibilityRole="alert">
+                  {status.message}
+                </Text>
+              ) : null}
+              <Text style={styles.panelFoot}>Forgot your PIN? A teacher or the office can reset it.</Text>
+            </View>
+          </BlurView>
+        ) : (
+          <BlurView intensity={28} tint="dark" style={styles.panel}>
+            <View style={styles.panelInner}>
+              {Platform.OS === 'ios' ? (
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                  cornerRadius={14}
+                  style={styles.appleBtn}
+                  onPress={() => void run('apple')}
+                />
+              ) : null}
+              <ProviderButton
+                label="Sign in with Google"
+                icon={<GoogleLogo size={20} />}
+                onPress={() => void run('google')}
+                disabled={busy}
+                busy={busyProvider === 'google'}
+                accessibilityLabel="Sign in with Google"
+                variant="dark"
+              />
 
-            {status.kind === 'sent' ? (
-              <Text style={styles.notice} accessibilityRole="alert">
-                ✓  Link sent to {status.email}. Open it on this device.
-              </Text>
-            ) : null}
-            {status.kind === 'error' ? (
-              <Text style={styles.error} accessibilityRole="alert">
-                {status.message}
-              </Text>
-            ) : null}
-          </View>
-        </BlurView>
+              <View style={styles.divider}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.dividerLine} />
+              </View>
+
+              <View style={styles.emailRow}>
+                <Mail size={18} color="#7d7d83" strokeWidth={2.5} style={styles.emailIcon} />
+                <TextInput
+                  style={styles.email}
+                  placeholder="you@school.org"
+                  placeholderTextColor="#7d7d83"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                  textContentType="emailAddress"
+                  accessibilityLabel="Email address"
+                  value={email}
+                  onChangeText={setEmail}
+                  editable={!busy && status.kind !== 'sent'}
+                  returnKeyType={usePassword ? 'next' : 'send'}
+                  onSubmitEditing={() => (usePassword ? undefined : void emailSubmit())}
+                />
+              </View>
+              {usePassword ? (
+                <View style={styles.emailRow}>
+                  <KeyRound size={18} color="#7d7d83" strokeWidth={2.5} style={styles.emailIcon} />
+                  <TextInput
+                    style={styles.email}
+                    placeholder="Password"
+                    placeholderTextColor="#7d7d83"
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="password"
+                    accessibilityLabel="Password"
+                    value={password}
+                    onChangeText={setPassword}
+                    editable={!busy}
+                    returnKeyType="go"
+                    onSubmitEditing={() => void emailSubmit()}
+                  />
+                </View>
+              ) : null}
+              <ProviderButton
+                label={usePassword ? 'Sign in' : 'Send magic link'}
+                onPress={() => void emailSubmit()}
+                disabled={busy || !email.includes('@') || status.kind === 'sent' || (usePassword && !password)}
+                busy={busyProvider === 'email'}
+                accessibilityLabel={usePassword ? 'Sign in with email and password' : 'Send magic link to email'}
+                variant="primary"
+              />
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setUsePassword((v) => !v);
+                  setStatus({ kind: 'idle' });
+                }}
+                disabled={busy}
+                style={({ pressed }) => ({ alignSelf: 'center', paddingVertical: 4, opacity: pressed ? 0.6 : 1 })}
+              >
+                <Text style={styles.dividerText}>
+                  {usePassword ? 'USE A MAGIC LINK INSTEAD' : 'USE A PASSWORD INSTEAD'}
+                </Text>
+              </Pressable>
+
+              {status.kind === 'sent' ? (
+                <Text style={styles.notice} accessibilityRole="alert">
+                  ✓  Link sent to {status.email}. Open it on this device.
+                </Text>
+              ) : null}
+              {status.kind === 'error' ? (
+                <Text style={styles.error} accessibilityRole="alert">
+                  {status.message}
+                </Text>
+              ) : null}
+            </View>
+          </BlurView>
+        )}
 
         <Text style={styles.footnote}>
           Beacon5 supports — never replaces — 911 and your school's crisis plan.
@@ -220,6 +324,52 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
       </KeyboardAvoidingView>
     </View>
   );
+}
+
+function SegmentButton({
+  icon,
+  label,
+  active,
+  onPress,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}): React.JSX.Element {
+  return (
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.segmentBtn,
+        active && styles.segmentBtnActive,
+        { opacity: pressed ? 0.85 : 1 },
+      ]}
+    >
+      {icon}
+      <Text style={[styles.segmentLabel, active && styles.segmentLabelActive]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+// Server error codes → kid-readable copy.
+function describeStudentError(err: unknown): string {
+  if (!(err instanceof SignInError)) return err instanceof Error ? err.message : 'Something went wrong';
+  switch (err.code) {
+    case 'STUDENT_LOGIN_FAILED':
+    case 'STUDENT_LOCKED':
+    case 'RATE_LIMITED':
+    case 'VALIDATION':
+      return err.message;
+    case 'HTTP_0':
+    case 'TypeError':
+      return "Can't reach the Beacon5 server. Check your connection.";
+    default:
+      return `${err.message} (${err.code})`;
+  }
 }
 
 function ProviderButton({
@@ -403,6 +553,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginTop: 4,
+  },
+  segment: {
+    flexDirection: 'row',
+    marginHorizontal: 20,
+    marginBottom: 12,
+    padding: 4,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(76,69,70,0.54)',
+    backgroundColor: 'rgba(20,20,22,0.6)',
+    gap: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 44,
+    borderRadius: 12,
+  },
+  segmentBtnActive: { backgroundColor: '#f4f4f5' },
+  segmentLabel: { color: '#a1a1aa', fontSize: 14, fontWeight: '700', letterSpacing: 0.2 },
+  segmentLabelActive: { color: '#0a0a0b' },
+  panelHint: { color: '#a1a1aa', fontSize: 13, lineHeight: 18, marginBottom: 2 },
+  panelFoot: { color: '#7d7d83', fontSize: 12, lineHeight: 16, marginTop: 2 },
+  mono: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    letterSpacing: 2,
   },
   footnote: {
     marginTop: 'auto',

@@ -9,6 +9,12 @@ import { verifyToken } from './auth/verifyToken';
 import { postSession } from './auth/session';
 import { postJoin, postIssueJoinCode } from './auth/joinCode';
 import { postBootstrap } from './auth/bootstrap';
+import {
+  postStudentLogin,
+  postProvisionStudents,
+  postRotateStudentPin,
+  throttleStudentLogin,
+} from './auth/student';
 import { requireCampusMember, requirePermission } from './rbac/requireRole';
 import {
   postClarifyAlert,
@@ -30,6 +36,25 @@ const app = createApp();
 app.post('/v1/auth/session',   verifyToken, asyncHandler(postSession));
 app.post('/v1/auth/join',      verifyToken, asyncHandler(postJoin));
 app.post('/v1/auth/bootstrap', verifyToken, asyncHandler(postBootstrap));
+
+// Public — no Bearer. Throttled per IP; per-student lockout inside.
+app.post('/v1/auth/student-login', throttleStudentLogin, asyncHandler(postStudentLogin));
+
+// ── Roster — admin provisions student accounts (student ID + PIN).
+app.post(
+  '/v1/roster/students',
+  verifyToken,
+  requireCampusMember,
+  requirePermission('roster:manage'),
+  asyncHandler(postProvisionStudents),
+);
+app.post(
+  '/v1/roster/students/:studentId/pin',
+  verifyToken,
+  requireCampusMember,
+  requirePermission('roster:manage'),
+  asyncHandler(postRotateStudentPin),
+);
 
 app.post(
   '/v1/auth/join-codes',
@@ -127,6 +152,9 @@ app.listen(port, () => {
       `    POST /v1/auth/join           (Bearer + { code, displayName })\n` +
       `    POST /v1/auth/bootstrap      (Bearer + { orgName, campusName, displayName })\n` +
       `    POST /v1/auth/join-codes     (Bearer + { role, expiresInHours? }) — staff/admin\n` +
+      `    POST /v1/auth/student-login  (PUBLIC { campusCode, studentId, pin }) → { tokenHash }\n` +
+      `    POST /v1/roster/students     (Bearer + { students:[{studentId, displayName, pin?}] }) — admin\n` +
+      `    POST /v1/roster/students/:studentId/pin (Bearer + { pin? }) — admin\n` +
       `    POST /v1/ai/clarify-alert    (Bearer + { studentLabel, locationHint?, context? })\n` +
       `    POST /v1/ai/brief            (Bearer + { incidentType, campusName, ... })\n` +
       `    POST /v1/ai/all-clear        (Bearer + { campusName, durationMin? })\n` +

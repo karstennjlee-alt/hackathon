@@ -5,7 +5,17 @@
 
 import type { Request, Response } from 'express';
 import { z } from 'zod';
+import crypto from 'node:crypto';
 import { admin } from '../supabase';
+
+// Short campus code students type at sign-in. Unambiguous alphabet, 6 chars.
+function generateCampusCode(): string {
+  const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const raw = crypto.randomBytes(6);
+  let out = '';
+  for (let i = 0; i < 6; i++) out += ALPHABET[raw[i]! % ALPHABET.length];
+  return out;
+}
 import { setSessionClaims } from './claims';
 import { ApiError } from '../http';
 import type { Auth } from '@beacon5/shared';
@@ -39,16 +49,25 @@ export async function postBootstrap(req: Request, res: Response): Promise<void> 
     .single();
   if (orgInsErr) throw new Error(`organizations insert: ${orgInsErr.message}`);
 
-  const { data: campus, error: campusInsErr } = await admin
-    .from('campuses')
-    .insert({
-      org_id: org.id,
-      name: parsed.data.campusName,
-      branding: { displayName: parsed.data.campusName },
-    })
-    .select('id')
-    .single();
-  if (campusInsErr) throw new Error(`campuses insert: ${campusInsErr.message}`);
+  // Retry on the (astronomically unlikely) code collision.
+  let campus: { id: string; code: string } | null = null;
+  for (let attempt = 0; attempt < 3 && !campus; attempt++) {
+    const { data, error } = await admin
+      .from('campuses')
+      .insert({
+        org_id: org.id,
+        name: parsed.data.campusName,
+        branding: { displayName: parsed.data.campusName },
+        code: generateCampusCode(),
+      })
+      .select('id, code')
+      .single();
+    if (data) campus = data as { id: string; code: string };
+    else if (!error || !/campuses_code_unique|duplicate/i.test(error.message)) {
+      throw new Error(`campuses insert: ${error?.message ?? 'no row'}`);
+    }
+  }
+  if (!campus) throw new Error('campuses insert: could not allocate a unique code');
 
   const provider = req.user.app_metadata?.provider ?? 'unknown';
   const { error: userInsErr } = await admin.from('users').insert({
@@ -67,6 +86,7 @@ export async function postBootstrap(req: Request, res: Response): Promise<void> 
     uid,
     campusId: campus.id as string,
     campusName: parsed.data.campusName,
+    campusCode: campus.code,
     role: 'admin',
     displayName: parsed.data.displayName,
     isMinor: false,

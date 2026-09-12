@@ -88,7 +88,7 @@ export async function postJoin(req: Request, res: Response): Promise<void> {
 
   const { data: campus } = await admin
     .from('campuses')
-    .select('name, branding')
+    .select('name, branding, code')
     .eq('id', row.campus_id)
     .maybeSingle();
   const branding = (campus?.branding ?? {}) as { displayName?: string };
@@ -97,6 +97,7 @@ export async function postJoin(req: Request, res: Response): Promise<void> {
     uid,
     campusId: row.campus_id,
     campusName: branding.displayName || (campus?.name as string) || 'Campus',
+    campusCode: (campus?.code as string) ?? '',
     role: row.role,
     displayName,
     isMinor: row.role === 'student',

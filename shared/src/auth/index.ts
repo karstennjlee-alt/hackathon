@@ -26,6 +26,7 @@ export interface SessionResponse {
   uid: ID;
   campusId: ID;
   campusName: string; // branding.displayName, falling back to campuses.name
+  campusCode: string; // short code students type at sign-in; shown to staff
   role: Role;
   displayName: string;
   isMinor: boolean;
