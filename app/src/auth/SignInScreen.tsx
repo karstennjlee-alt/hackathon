@@ -255,6 +255,7 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
                   placeholderTextColor="#7d7d83"
                   autoCapitalize="none"
                   autoCorrect={false}
+                  keyboardType="email-address"
                   accessibilityLabel="Email address"
                   value={email}
                   onChangeText={setEmail}

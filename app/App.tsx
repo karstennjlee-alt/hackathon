@@ -2049,7 +2049,7 @@ function Header({
     mode === 'student'
       ? `Campus Grid - ${campusName ?? 'San Jose High'}`
       : mode === 'staff'
-        ? `Mission Control - Live${campusCode ? ` · Campus code ${campusCode}` : ''}`
+        ? `Mission Control${campusCode ? ` · Code ${campusCode}` : ' - Live'}`
         : 'Parent Verification Secure';
 
   const tokenColor = locationToken === 'active' ? '#fb7185' : '#8ee7ff';

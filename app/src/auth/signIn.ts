@@ -132,6 +132,49 @@ async function signInWithOAuth(provider: 'google' | 'apple'): Promise<void> {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// Incoming auth deep links (magic link taps, OAuth redirects that arrive
+// via the OS instead of the in-app browser). Supabase puts either
+// ?code= (PKCE) or #access_token=&refresh_token= (implicit) on the URL.
+// Returns true if the URL was an auth link and a session was established.
+// ──────────────────────────────────────────────────────────────────
+export async function handleAuthUrl(rawUrl: string | null | undefined): Promise<boolean> {
+  if (!rawUrl) return false;
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  const q = url.searchParams;
+  const frag = new URLSearchParams(url.hash.replace(/^#/, ''));
+  const code = q.get('code') ?? frag.get('code');
+  const accessToken = q.get('access_token') ?? frag.get('access_token');
+  const refreshToken = q.get('refresh_token') ?? frag.get('refresh_token');
+  const errDesc = q.get('error_description') ?? frag.get('error_description');
+  if (errDesc) throw new SignInError('LINK_ERROR', errDesc);
+  // Recommended mobile template: {{ .SiteURL }}/auth-callback?token_hash={{ .TokenHash }}&type=magiclink
+  // — the app verifies directly, no browser round-trip.
+  const tokenHash = q.get('token_hash') ?? frag.get('token_hash');
+  if (tokenHash) {
+    const type = (q.get('type') ?? frag.get('type') ?? 'magiclink') as 'magiclink' | 'email' | 'recovery' | 'invite';
+    const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+    if (error) throw new SignInError('LINK_VERIFY', error.message);
+    return true;
+  }
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) throw new SignInError('LINK_EXCHANGE', error.message);
+    return true;
+  }
+  if (accessToken && refreshToken) {
+    const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+    if (error) throw new SignInError('LINK_SET_SESSION', error.message);
+    return true;
+  }
+  return false;
+}
+
+// ──────────────────────────────────────────────────────────────────
 // Sign in with Email — magic link
 // ──────────────────────────────────────────────────────────────────
 export async function sendEmailMagicLink(email: string): Promise<void> {

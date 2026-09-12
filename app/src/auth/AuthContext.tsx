@@ -4,7 +4,9 @@
 // forces a JWT refresh so the new claims are visible to RLS.
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { Linking } from 'react-native';
 import type { Session, User as SupaUser } from '@supabase/supabase-js';
+import { handleAuthUrl } from './signIn';
 import { supabase } from '../supabase';
 import { env } from '../env';
 import { startRealtimeSync, stopRealtimeSync } from '../data/realtime';
@@ -143,9 +145,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       }
       void applySession(s);
     });
+    // Magic links / OAuth redirects delivered by the OS. The session they
+    // establish flows through onAuthStateChange like any other sign-in.
+    const onUrl = ({ url }: { url: string }) => {
+      handleAuthUrl(url).catch((err) => console.warn('[auth] link failed:', err));
+    };
+    const linkSub = Linking.addEventListener('url', onUrl);
+    void Linking.getInitialURL().then((url) => {
+      if (url) onUrl({ url });
+    });
     return () => {
       mounted = false;
       sub.subscription.unsubscribe();
+      linkSub.remove();
     };
   }, []);
 
