@@ -69,16 +69,25 @@ If you start either of the above and any required env var is missing, the env va
 
 See [TODO.md](TODO.md) for the requirement-level picture.
 
-**Working end-to-end against the dev Supabase project (verified 2026-09-11):**
-- Sign in → `JoinCampusScreen` → redeem a join code *or* create a new campus (self-serve, D1)
-- Monolith runs off the real identity (`AppIdentity`): no roster picker, real campus name, Supabase sign-out
-- Incident lifecycle: activate → location stream → reset/clear, mirrored to the server and back to every device via Realtime (INSERT + UPDATE)
-- Campus threat declare/clear, chat, mass + staff broadcasts, AI proxy with Gemini → template fallback
-- Migrations `002` (students read their own broadcasts) and `003` (join-code FK fix) applied
+**Working end-to-end against the dev Supabase project (verified in the simulator 2026-09-12):**
+- Student sign-in: campus code + student ID + PIN (no email). Staff/family: Apple, Google,
+  magic link (deep-linked into the app) or email + password.
+- Join a campus with a staff/admin code, create a new campus, or link a parent to a student
+  with a guardian code.
+- **Manage campus** (Settings, staff/admin): add students → PIN, reset PINs, parent codes,
+  staff/admin codes, campus code. Everything a school office needs, in the app.
+- Incident lifecycle: activate → location stream → reset/clear, mirrored to the server and
+  back to every device via Realtime. Campus threat declare/clear, chat, mass + staff
+  broadcasts, AI proxy with template fallback.
+- Server push (Expo Push) for beacon / threat / broadcasts / chat — needs a dev build.
+- Nightly purge of location traces per campus retention policy.
+- Migrations `001`–`006` applied. `npm test` runs the server unit tests.
+
+**Setting up a school:** [SCHOOL_SETUP.md](SCHOOL_SETUP.md).
 
 **Next:**
-- Real step-up auth (Supabase MFA `aal2` or re-auth challenge) — the current `iat` check is cosmetic
-- Server push (Expo Push) — notifications are still local-only
-- Guardian linking + parent join path
-- Admin console (`admin/` is still a README)
-- Split `App.tsx` into modules (step 7)
+- Zone editor on the admin screen (replaces the 4 built-in zones)
+- CSV roster import in the app
+- Real step-up auth (Supabase MFA `aal2`)
+- Split `App.tsx` into modules (step 7); remove `@ts-nocheck`
+- Store readiness (privacy labels, account deletion, background-location justification)
