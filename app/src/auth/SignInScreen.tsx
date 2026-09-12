@@ -18,9 +18,9 @@ import {
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
-import { ShieldAlert, Mail } from 'lucide-react-native';
+import { ShieldAlert, Mail, KeyRound } from 'lucide-react-native';
 import * as AppleAuthentication from 'expo-apple-authentication';
-import { sendEmailMagicLink, signInWithApple, signInWithGoogle, SignInError } from './signIn';
+import { sendEmailMagicLink, signInWithApple, signInWithGoogle, signInWithPassword, SignInError } from './signIn';
 
 function GoogleLogo({ size = 20 }: { size?: number }): React.JSX.Element {
   return (
@@ -53,6 +53,8 @@ type Status =
 
 export function SignInScreen({ campusName }: { campusName?: string }): React.JSX.Element {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [usePassword, setUsePassword] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
 
   async function run(provider: 'apple' | 'google'): Promise<void> {
@@ -73,6 +75,11 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
   async function emailSubmit(): Promise<void> {
     setStatus({ kind: 'busy', provider: 'email' });
     try {
+      if (usePassword) {
+        await signInWithPassword(email, password);
+        setStatus({ kind: 'idle' });
+        return;
+      }
       await sendEmailMagicLink(email);
       setStatus({ kind: 'sent', email });
     } catch (err) {
@@ -148,18 +155,51 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
                 value={email}
                 onChangeText={setEmail}
                 editable={!busy && status.kind !== 'sent'}
-                returnKeyType="send"
-                onSubmitEditing={() => void emailSubmit()}
+                returnKeyType={usePassword ? 'next' : 'send'}
+                onSubmitEditing={() => (usePassword ? undefined : void emailSubmit())}
               />
             </View>
+            {usePassword ? (
+              <View style={styles.emailRow}>
+                <KeyRound size={18} color="#7d7d83" strokeWidth={2.5} style={styles.emailIcon} />
+                <TextInput
+                  style={styles.email}
+                  placeholder="Password"
+                  placeholderTextColor="#7d7d83"
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="password"
+                  accessibilityLabel="Password"
+                  value={password}
+                  onChangeText={setPassword}
+                  editable={!busy}
+                  returnKeyType="go"
+                  onSubmitEditing={() => void emailSubmit()}
+                />
+              </View>
+            ) : null}
             <ProviderButton
-              label="Send magic link"
+              label={usePassword ? 'Sign in' : 'Send magic link'}
               onPress={() => void emailSubmit()}
-              disabled={busy || !email.includes('@') || status.kind === 'sent'}
+              disabled={busy || !email.includes('@') || status.kind === 'sent' || (usePassword && !password)}
               busy={busyProvider === 'email'}
-              accessibilityLabel="Send magic link to email"
+              accessibilityLabel={usePassword ? 'Sign in with email and password' : 'Send magic link to email'}
               variant="primary"
             />
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                setUsePassword((v) => !v);
+                setStatus({ kind: 'idle' });
+              }}
+              disabled={busy}
+              style={({ pressed }) => ({ alignSelf: 'center', paddingVertical: 4, opacity: pressed ? 0.6 : 1 })}
+            >
+              <Text style={styles.dividerText}>
+                {usePassword ? 'USE A MAGIC LINK INSTEAD' : 'USE A PASSWORD INSTEAD'}
+              </Text>
+            </Pressable>
 
             {status.kind === 'sent' ? (
               <Text style={styles.notice} accessibilityRole="alert">

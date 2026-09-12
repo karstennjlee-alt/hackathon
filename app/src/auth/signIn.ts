@@ -145,6 +145,20 @@ export async function sendEmailMagicLink(email: string): Promise<void> {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// Sign in with Email + password (R8.1.1) — also the only path that works
+// in a simulator, where Apple/Google/magic-link can't complete.
+// ──────────────────────────────────────────────────────────────────
+export async function signInWithPassword(email: string, password: string): Promise<void> {
+  const trimmed = email.trim().toLowerCase();
+  if (!trimmed || !trimmed.includes('@')) {
+    throw new SignInError('EMAIL_INVALID', 'enter a valid email');
+  }
+  if (!password) throw new SignInError('PASSWORD_REQUIRED', 'enter your password');
+  const { error } = await supabase.auth.signInWithPassword({ email: trimmed, password });
+  if (error) throw new SignInError('PASSWORD_REJECT', error.message);
+}
+
+// ──────────────────────────────────────────────────────────────────
 // Sign out
 // ──────────────────────────────────────────────────────────────────
 export async function signOut(): Promise<void> {
