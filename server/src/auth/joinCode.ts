@@ -17,7 +17,8 @@ const RedeemBody = z.object({
 interface JoinCodeRow {
   code: string;
   campus_id: string;
-  role: 'student' | 'staff' | 'admin';
+  role: 'student' | 'staff' | 'admin' | 'parent';
+  student_user_id: string | null;   // set for parent (guardian) codes
   expires_at: string;
   consumed_by: string | null;
 }
@@ -41,7 +42,7 @@ export async function postJoin(req: Request, res: Response): Promise<void> {
     .eq('code', normalized)
     .is('consumed_by', null)
     .gt('expires_at', nowIso)
-    .select('code, campus_id, role, expires_at, consumed_by')
+    .select('code, campus_id, role, student_user_id, expires_at, consumed_by')
     .maybeSingle();
 
   if (claimErr) throw new Error(`join_codes claim: ${claimErr.message}`);
@@ -84,6 +85,24 @@ export async function postJoin(req: Request, res: Response): Promise<void> {
     throw new Error(`users insert: ${insertErr.message}`);
   }
 
+  // Guardian code: link the new parent to the student it was issued for.
+  let linkedStudents: string[] | undefined;
+  if (row.role === 'parent') {
+    if (!row.student_user_id) throw new Error('parent join code has no student_user_id');
+    const { error: linkErr } = await admin.from('guardian_links').insert({
+      campus_id: row.campus_id,
+      guardian_user_id: uid,
+      student_user_id: row.student_user_id,
+      verified: true,
+    });
+    if (linkErr) {
+      await admin.from('users').delete().eq('id', uid);
+      await admin.from('join_codes').update({ consumed_by: null, consumed_at: null }).eq('code', normalized);
+      throw new Error(`guardian_links insert: ${linkErr.message}`);
+    }
+    linkedStudents = [row.student_user_id];
+  }
+
   await setSessionClaims(uid, { campusId: row.campus_id, role: row.role });
 
   const { data: campus } = await admin
@@ -101,6 +120,7 @@ export async function postJoin(req: Request, res: Response): Promise<void> {
     role: row.role,
     displayName,
     isMinor: row.role === 'student',
+    ...(linkedStudents ? { linkedStudents } : {}),
   };
   res.status(201).json(body);
 }
@@ -108,10 +128,17 @@ export async function postJoin(req: Request, res: Response): Promise<void> {
 // ──────────────────────────────────────────────────────────────────
 // POST /v1/auth/join-codes  (staff/admin only)
 // ──────────────────────────────────────────────────────────────────
-const IssueBody = z.object({
-  role: z.enum(['student', 'staff', 'admin']),
-  expiresInHours: z.number().int().positive().max(720).optional(),
-});
+const IssueBody = z
+  .object({
+    role: z.enum(['student', 'staff', 'admin', 'parent']),
+    // Required for role='parent': the student this guardian will be linked to.
+    studentUserId: z.string().uuid().optional(),
+    expiresInHours: z.number().int().positive().max(720).optional(),
+  })
+  .refine((b) => b.role !== 'parent' || !!b.studentUserId, {
+    message: 'studentUserId is required for a parent code',
+    path: ['studentUserId'],
+  });
 
 function generateCode(): string {
   const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -140,6 +167,19 @@ export async function postIssueJoinCode(req: Request, res: Response): Promise<vo
     throw new ApiError(403, 'FORBIDDEN', 'Only admin can issue admin codes');
   }
 
+  // Parent codes must point at a student on the caller's campus.
+  if (parsed.data.role === 'parent') {
+    const { data: student, error: sErr } = await admin
+      .from('users')
+      .select('id, campus_id, role')
+      .eq('id', parsed.data.studentUserId!)
+      .maybeSingle();
+    if (sErr) throw new Error(`users lookup: ${sErr.message}`);
+    if (!student || student.campus_id !== callerCampus || student.role !== 'student') {
+      throw new ApiError(404, 'NOT_FOUND', 'student not found on this campus', 'studentUserId');
+    }
+  }
+
   const expiresInHours = parsed.data.expiresInHours ?? 72;
   const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000);
   const code = generateCode();
@@ -148,6 +188,7 @@ export async function postIssueJoinCode(req: Request, res: Response): Promise<vo
     code,
     campus_id: callerCampus,
     role: parsed.data.role,
+    student_user_id: parsed.data.role === 'parent' ? parsed.data.studentUserId : null,
     created_by: req.user.sub,
     expires_at: expiresAt.toISOString(),
   });
@@ -156,6 +197,7 @@ export async function postIssueJoinCode(req: Request, res: Response): Promise<vo
   const body: Auth.IssueJoinCodeResponse = {
     code,
     role: parsed.data.role,
+    ...(parsed.data.role === 'parent' ? { studentUserId: parsed.data.studentUserId } : {}),
     expiresAt: expiresAt.getTime(),
   };
   res.status(201).json(body);

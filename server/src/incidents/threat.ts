@@ -15,6 +15,7 @@ import type { Request, Response } from 'express';
 import { admin } from '../supabase';
 import { ApiError } from '../http';
 import { audit } from '../audit';
+import { campusUserIds, pushLater, sendToUsers } from '../push/expo';
 
 interface CampusPolicy {
   whoCanDeclareThreat?: 'any-staff' | 'admin-only';
@@ -82,6 +83,21 @@ export async function postDeclareThreat(req: Request, res: Response): Promise<vo
     status: 'active',
     at: new Date(inserted.at).getTime(),
   });
+
+  pushLater(async () => {
+    await sendToUsers(await campusUserIds(campusId, ['student', 'staff', 'admin'], uid), {
+      kind: 'threat',
+      title: 'Campus threat declared',
+      body: 'Follow your lockdown plan. Open Beacon5 for instructions.',
+      data: { threatId: inserted.id },
+    });
+    await sendToUsers(await campusUserIds(campusId, ['parent']), {
+      kind: 'threat',
+      title: 'Beacon5 — official update',
+      body: 'A campus threat has been declared. Do not travel to the school. Updates will follow here.',
+      data: { threatId: inserted.id },
+    });
+  });
 }
 
 // ─── POST /v1/threat/clear ────────────────────────────────────────
@@ -126,5 +142,14 @@ export async function postClearThreat(req: Request, res: Response): Promise<void
     id: inserted.id,
     status: 'cleared',
     at: new Date(inserted.at).getTime(),
+  });
+
+  pushLater(async () => {
+    await sendToUsers(await campusUserIds(campusId, ['student', 'parent', 'staff', 'admin'], uid), {
+      kind: 'threat',
+      title: 'All clear',
+      body: 'The campus threat has been cleared. Normal operations resume.',
+      data: { threatId: inserted.id },
+    });
   });
 }

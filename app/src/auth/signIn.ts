@@ -15,6 +15,7 @@ import * as AuthSession from 'expo-auth-session';
 import { Platform } from 'react-native';
 import { supabase } from '../supabase';
 import { env } from '../env';
+import { unregisterPush } from '../push';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -186,5 +187,7 @@ export async function signInAsStudent(campusCode: string, studentId: string, pin
 // Sign out
 // ──────────────────────────────────────────────────────────────────
 export async function signOut(): Promise<void> {
+  // Forget this device's push token first (needs the session's JWT).
+  await unregisterPush();
   await supabase.auth.signOut();
 }

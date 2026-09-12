@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { admin } from '../supabase';
 import { ApiError, parseBody } from '../http';
 import { audit } from '../audit';
+import { campusUserIds, guardianIds, pushLater, sendToUsers } from '../push/expo';
 
 const CoordsSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -99,6 +100,26 @@ export async function postActivateIncident(req: Request, res: Response): Promise
   res.status(201).json({
     id: inserted.id,
     activatedAt: new Date(inserted.activated_at).getTime(),
+  });
+
+  // Staff get the alert; guardians get a calmer one (R8.5.3, R8.9.4 —
+  // minimal content: first name + zone, nothing else).
+  pushLater(async () => {
+    const { data: who } = await admin.from('users').select('display_name').eq('id', uid).maybeSingle();
+    const first = String(who?.display_name ?? 'A student').split(' ')[0];
+    const where = body.zoneHint ? ` near ${body.zoneHint}` : '';
+    await sendToUsers(await campusUserIds(campusId, ['staff', 'admin'], uid), {
+      kind: 'beacon',
+      title: 'Beacon activated',
+      body: `${first} needs help${where}.`,
+      data: { incidentId: inserted.id },
+    });
+    await sendToUsers(await guardianIds(campusId, uid), {
+      kind: 'beacon',
+      title: 'Beacon5',
+      body: `${first} activated their beacon. Staff are responding — updates will follow here.`,
+      data: { incidentId: inserted.id },
+    });
   });
 }
 

@@ -56,6 +56,34 @@ export function bootstrapCampus(input: {
   });
 }
 
+// ─── staff / admin management calls ──────────────────────────────
+
+export type CodeRole = 'student' | 'staff' | 'admin' | 'parent';
+
+export function issueJoinCode(
+  role: CodeRole,
+  opts: { studentUserId?: string; expiresInHours?: number } = {},
+): Promise<{ code: string; role: CodeRole; studentUserId?: string; expiresAt: number }> {
+  return post('/v1/auth/join-codes', { role, ...opts });
+}
+
+export interface ProvisionResult {
+  studentId: string;
+  status: 'created' | 'exists' | 'error';
+  pin?: string;
+  error?: string;
+}
+
+export function provisionStudents(
+  students: Array<{ studentId: string; displayName: string; pin?: string }>,
+): Promise<{ results: ProvisionResult[] }> {
+  return post('/v1/roster/students', { students });
+}
+
+export function rotateStudentPin(studentId: string, pin?: string): Promise<{ studentId: string; pin?: string }> {
+  return post(`/v1/roster/students/${encodeURIComponent(studentId)}/pin`, pin ? { pin } : {});
+}
+
 // Friendly copy for the codes the server can return.
 export function describeJoinError(err: unknown): string {
   if (!(err instanceof JoinError)) return err instanceof Error ? err.message : 'Something went wrong';

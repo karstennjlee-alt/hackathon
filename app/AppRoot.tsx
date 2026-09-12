@@ -8,7 +8,8 @@
 //   member  → monolith driven by the real identity (no roster picker)
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, Modal, View, StyleSheet } from 'react-native';
+import { CampusAdminScreen } from './src/admin/CampusAdminScreen';
 import { AuthProvider, useAuth, type BeaconSession } from './src/auth/AuthContext';
 import { SignInScreen } from './src/auth/SignInScreen';
 import { JoinCampusScreen } from './src/auth/JoinCampusScreen';
@@ -19,11 +20,16 @@ import App, { type AppIdentity } from './App';
 // Map the v2 session onto the monolith's Profile shape. Parents need the
 // linked student's display name, which lives in public.users — resolved
 // async below and re-rendered when it lands.
-function buildIdentity(b: BeaconSession, linkedStudentName: string | null): AppIdentity | null {
+function buildIdentity(
+  b: BeaconSession,
+  linkedStudentName: string | null,
+  openCampusAdmin: () => void,
+): AppIdentity | null {
   if (!b.campusId || !b.role) return null;
   const campusName = b.campusName ?? 'Campus';
   const name = b.displayName ?? 'Campus member';
-  const base = { campusName, campusCode: b.campusCode ?? undefined, signOut: () => void signOut() };
+  const staffOnly = b.role === 'staff' || b.role === 'admin' ? { openCampusAdmin } : {};
+  const base = { campusName, campusCode: b.campusCode ?? undefined, signOut: () => void signOut(), ...staffOnly };
   switch (b.role) {
     case 'student':
       return { ...base, profile: { role: 'student', studentId: b.uid, studentName: name } };
@@ -50,6 +56,7 @@ function buildIdentity(b: BeaconSession, linkedStudentName: string | null): AppI
 function Gate(): React.JSX.Element {
   const { loading, session, beacon, demoMode } = useAuth();
   const [linkedStudentName, setLinkedStudentName] = useState<string | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   const linkedStudentId = beacon?.role === 'parent' ? beacon.linkedStudents?.[0] ?? null : null;
   useEffect(() => {
@@ -65,7 +72,7 @@ function Gate(): React.JSX.Element {
   }, [linkedStudentId]);
 
   const identity = useMemo(
-    () => (beacon ? buildIdentity(beacon, linkedStudentName) : null),
+    () => (beacon ? buildIdentity(beacon, linkedStudentName, () => setAdminOpen(true)) : null),
     [beacon, linkedStudentName],
   );
 
@@ -79,7 +86,24 @@ function Gate(): React.JSX.Element {
 
   if (demoMode) return <App />;
   if (!session) return <SignInScreen />;
-  if (identity) return <App identity={identity} />;
+  if (identity) {
+    return (
+      <>
+        <App identity={identity} />
+        {beacon?.campusId && identity.openCampusAdmin ? (
+          <Modal visible={adminOpen} animationType="slide" onRequestClose={() => setAdminOpen(false)}>
+            <CampusAdminScreen
+              campusId={beacon.campusId}
+              campusName={identity.campusName}
+              campusCode={identity.campusCode}
+              isAdmin={beacon.role === 'admin'}
+              onClose={() => setAdminOpen(false)}
+            />
+          </Modal>
+        ) : null}
+      </>
+    );
+  }
   return <JoinCampusScreen />;
 }
 

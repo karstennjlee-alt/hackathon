@@ -12,7 +12,10 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Beacon5 captures your location only when you activate the emergency beacon, so staff and your guardian can find you.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Beacon5 keeps tracking your location while the emergency beacon is active even if your screen is locked, so staff and your guardian can reach you during an emergency.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -47,6 +50,7 @@
         }
       ],
       "expo-web-browser"
-    ]
+    ],
+    "scheme": "beacon5"
   }
 }

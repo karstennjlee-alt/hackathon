@@ -19,6 +19,7 @@ import { ApiError, parseBody } from '../http';
 import { audit } from '../audit';
 import { hasPermission } from '../rbac/permissions';
 import type { Role } from '@beacon5/shared';
+import { audienceRoles, campusUserIds, guardianIds, pushLater, sendToUsers } from '../push/expo';
 
 const ChatBody = z.object({
   studentUserId: z.string().uuid(),
@@ -119,6 +120,22 @@ export async function postChatMessage(req: Request, res: Response): Promise<void
     id: inserted.id,
     at: new Date(inserted.at).getTime(),
   });
+
+  // Parent → staff; staff → that student's guardians.
+  pushLater(async () => {
+    const { data: who } = await admin.from('users').select('display_name').eq('id', uid).maybeSingle();
+    const from = String(who?.display_name ?? 'Beacon5');
+    const to =
+      role === 'parent'
+        ? await campusUserIds(campusId, ['staff', 'admin'])
+        : (await guardianIds(campusId, body.studentUserId)).filter((g) => g !== uid);
+    await sendToUsers(to, {
+      kind: 'chat',
+      title: from,
+      body: body.body.length > 120 ? `${body.body.slice(0, 117)}…` : body.body,
+      data: { messageId: inserted.id, studentUserId: body.studentUserId },
+    });
+  });
 }
 
 // ─── POST /v1/messages/mass ───────────────────────────────────────
@@ -160,6 +177,16 @@ export async function postMassMessage(req: Request, res: Response): Promise<void
   res.status(201).json({
     id: inserted.id,
     at: new Date(inserted.at).getTime(),
+  });
+
+  pushLater(async () => {
+    const text = body.clarifiedBody ?? body.body;
+    await sendToUsers(await campusUserIds(campusId, audienceRoles(body.audience), uid), {
+      kind: 'mass',
+      title: 'Campus update',
+      body: text.length > 160 ? `${text.slice(0, 157)}…` : text,
+      data: { messageId: inserted.id },
+    });
   });
 }
 
@@ -212,5 +239,15 @@ export async function postBroadcastMessage(req: Request, res: Response): Promise
   res.status(201).json({
     id: inserted.id,
     at: new Date(inserted.at).getTime(),
+  });
+
+  pushLater(async () => {
+    const text = body.clarifiedBody ?? body.body;
+    await sendToUsers([body.studentUserId, ...(await guardianIds(campusId, body.studentUserId))], {
+      kind: 'broadcast',
+      title: 'Update from staff',
+      body: text.length > 160 ? `${text.slice(0, 157)}…` : text,
+      data: { messageId: inserted.id, studentUserId: body.studentUserId },
+    });
   });
 }

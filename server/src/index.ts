@@ -30,6 +30,7 @@ import {
 } from './incidents/routes';
 import { postDeclareThreat, postClearThreat } from './incidents/threat';
 import { postChatMessage, postMassMessage, postBroadcastMessage } from './messaging/routes';
+import { postRegisterDevice, deleteDevice } from './push/routes';
 
 const app = createApp();
 
@@ -137,6 +138,10 @@ app.post(
   asyncHandler(postBroadcastMessage),
 );
 
+// ── Devices — Expo push token registry.
+app.post('/v1/devices',   verifyToken, requireCampusMember, asyncHandler(postRegisterDevice));
+app.delete('/v1/devices', verifyToken, asyncHandler(deleteDevice));
+
 app.use(errorHandler);
 
 const port = env.PORT;
@@ -167,6 +172,7 @@ app.listen(port, () => {
       `    POST /v1/threat/clear        (Bearer) — step-up\n` +
       `    POST /v1/messages/chat       (Bearer + { studentUserId, body })\n` +
       `    POST /v1/messages/mass       (Bearer + { audience, body })\n` +
-      `    POST /v1/messages/broadcast  (Bearer + { studentUserId, body }) — staff/admin all-clear\n\n`,
+      `    POST /v1/messages/broadcast  (Bearer + { studentUserId, body }) — staff/admin all-clear\n` +
+      `    POST /v1/devices             (Bearer + { pushToken, platform })\n\n`,
   );
 });

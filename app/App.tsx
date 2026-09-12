@@ -299,6 +299,8 @@ export type AppIdentity = {
   // Short code students type at sign-in. Shown to staff so they can hand it out.
   campusCode?: string;
   signOut: () => void;
+  // Staff/admin: opens the in-app campus management screen (roster, PINs, codes).
+  openCampusAdmin?: () => void;
 };
 
 const PROFILE_STORAGE_KEY = 'beacon5.profile.v1';
@@ -743,13 +745,20 @@ async function sendMassBroadcast(
 // ============================================================================
 // NOTIFICATIONS
 // ============================================================================
+// Foreground: the app already raises LOCAL notifications for events it
+// sees live, so a server push (data.remote) arriving while active would
+// double up — show it silently in the list only. Background/killed is
+// exactly what the push is for; those are handled by the OS, not here.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (n) => {
+    const remote = n.request.content.data?.remote === true;
+    return {
+      shouldShowBanner: !remote,
+      shouldShowList: true,
+      shouldPlaySound: !remote,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 async function ensureNotificationPermission(): Promise<boolean> {
@@ -917,7 +926,11 @@ const computeZoneVerifications = (
 export default function App({ identity = null }: { identity?: AppIdentity | null } = {}) {
   const [profile, setProfile] = useState<Profile | null>(identity?.profile ?? null);
   const [profileLoaded, setProfileLoaded] = useState(identity !== null);
-  const [reports, setReports] = useState<Report[]>(seedReports);
+  // Demo mode ships fake reports so the staff view has something to show.
+  // A real campus starts empty — a seeded "Room 104 threat" would be a
+  // false alarm on a teacher's phone.
+  const initialReports = identity ? [] : seedReports;
+  const [reports, setReports] = useState<Report[]>(initialReports);
   const [incident, setIncident] = useState<Incident | null>(null);
   const [escalationSheet, setEscalationSheet] = useState<'threat' | 'medical' | null>(null);
   const [staffConfirmed, setStaffConfirmed] = useState<Set<string>>(new Set());
@@ -1134,7 +1147,7 @@ export default function App({ identity = null }: { identity?: AppIdentity | null
 
   const onResetProfile = () => {
     setIncident(null);
-    setReports(seedReports);
+    setReports(initialReports);
     setStaffConfirmed(new Set());
     resetAllNotifRefs();
     if (identity) {
@@ -1182,7 +1195,7 @@ export default function App({ identity = null }: { identity?: AppIdentity | null
         clearEvents().catch(() => undefined);
         setEvents([]);
         setIncident(null);
-        setReports(seedReports);
+        setReports(initialReports);
         setStaffConfirmed(new Set());
         resetAllNotifRefs();
       }, 6000);
@@ -1577,7 +1590,7 @@ export default function App({ identity = null }: { identity?: AppIdentity | null
             onSimulate={simulateNearbyReport}
             onMarkConfirmed={markStaffConfirmed}
             onAllClear={onAllClear}
-            onWipeEvents={onWipeEvents}
+            onWipeEvents={identity ? undefined : onWipeEvents}
             campusThreatActive={showCampusBanner}
             onOpenThreatModal={() => setThreatModalOpen(true)}
             themeMode={themeMode}
@@ -1611,7 +1624,8 @@ export default function App({ identity = null }: { identity?: AppIdentity | null
           setSettingsOpen(false);
           onResetProfile();
         }}
-        onWipeEvents={onWipeEvents}
+        onWipeEvents={identity ? undefined : onWipeEvents}
+        onManageCampus={identity?.openCampusAdmin}
       />
       <ThreatPasswordModal
         visible={threatModalOpen}
@@ -1635,13 +1649,15 @@ function SettingsSheet({
   onChangeTheme,
   onSignOut,
   onWipeEvents,
+  onManageCampus,
 }: {
   visible: boolean;
   onClose: () => void;
   themeMode: 'dark' | 'light';
   onChangeTheme: (m: 'dark' | 'light') => void;
   onSignOut: () => void;
-  onWipeEvents: () => void;
+  onWipeEvents?: () => void;
+  onManageCampus?: () => void;
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -1680,10 +1696,27 @@ function SettingsSheet({
             </Pressable>
           </View>
 
-          <Pressable onPress={onWipeEvents} style={styles.settingsRow} accessibilityRole="button" accessibilityLabel="Reset demo events">
-            <RefreshCcw color="#a1a1aa" size={16} />
-            <Text style={styles.settingsRowLabel}>Reset demo events</Text>
-          </Pressable>
+          {onManageCampus ? (
+            <Pressable
+              onPress={() => {
+                onClose();
+                onManageCampus();
+              }}
+              style={styles.settingsRow}
+              accessibilityRole="button"
+              accessibilityLabel="Manage campus"
+            >
+              <UsersRound color="#7dd3fc" size={16} />
+              <Text style={[styles.settingsRowLabel, { color: '#7dd3fc' }]}>Manage campus — roster, PINs, codes</Text>
+            </Pressable>
+          ) : null}
+
+          {onWipeEvents ? (
+            <Pressable onPress={onWipeEvents} style={styles.settingsRow} accessibilityRole="button" accessibilityLabel="Reset demo events">
+              <RefreshCcw color="#a1a1aa" size={16} />
+              <Text style={styles.settingsRowLabel}>Reset demo events</Text>
+            </Pressable>
+          ) : null}
 
           <Pressable onPress={onSignOut} style={styles.settingsRow} accessibilityRole="button" accessibilityLabel="Sign out">
             <LogOut color="#fb7185" size={16} />
@@ -3174,7 +3207,7 @@ function StaffMode({
   onSimulate: () => void;
   onMarkConfirmed: (zoneKey: string) => void;
   onAllClear: (incident: Extract<BeaconEvent, { type: 'BEACON_ACTIVATED' }>) => Promise<void>;
-  onWipeEvents: () => void;
+  onWipeEvents?: () => void;
   campusThreatActive: boolean;
   onOpenThreatModal: () => void;
   themeMode?: 'dark' | 'light';
@@ -3428,10 +3461,12 @@ function StaffMode({
         onToggle={() => setMassCollapsed((c) => !c)}
       />
 
-      <Pressable onPress={onWipeEvents} style={({ pressed }) => [styles.wipeButton, pressed && styles.pressed]}>
-        <RefreshCcw color="#a1a1aa" size={12} />
-        <Text style={styles.wipeText}>Reset demo events</Text>
-      </Pressable>
+      {onWipeEvents ? (
+        <Pressable onPress={onWipeEvents} style={({ pressed }) => [styles.wipeButton, pressed && styles.pressed]}>
+          <RefreshCcw color="#a1a1aa" size={12} />
+          <Text style={styles.wipeText}>Reset demo events</Text>
+        </Pressable>
+      ) : null}
     </ScrollView>
     </KeyboardAvoidingView>
   );

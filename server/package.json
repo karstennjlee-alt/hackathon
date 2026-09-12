@@ -2,13 +2,14 @@
   "name": "@beacon5/server",
   "version": "0.0.0",
   "private": true,
-  "description": "Beacon5 authoritative backend — AI proxy, RBAC, push dispatcher, tenant-scoped writes.",
+  "description": "Beacon5 authoritative backend \u2014 AI proxy, RBAC, push dispatcher, tenant-scoped writes.",
   "main": "src/index.ts",
   "scripts": {
     "dev": "node --env-file=.env --watch --import tsx src/index.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@beacon5/shared": "*",

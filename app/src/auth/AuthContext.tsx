@@ -9,6 +9,7 @@ import { supabase } from '../supabase';
 import { env } from '../env';
 import { startRealtimeSync, stopRealtimeSync } from '../data/realtime';
 import { resetEventStoreForSignOut, setStorageScope } from '../data/events';
+import { registerForPush } from '../push';
 
 type Role = 'student' | 'parent' | 'staff' | 'admin';
 
@@ -112,6 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
           await supabase.auth.refreshSession();
         }
         void startRealtimeSync(b.campusId);
+        void registerForPush();
       } else {
         void stopRealtimeSync();
       }

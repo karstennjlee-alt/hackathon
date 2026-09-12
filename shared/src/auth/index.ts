@@ -65,13 +65,15 @@ export type BootstrapResponse = SessionResponse;
 // the route lands in the admin/roster module later)
 // ──────────────────────────────────────────────────────────────────
 export interface IssueJoinCodeRequest {
-  role: Exclude<Role, 'parent'>; // parents come via guardian links, not codes
+  role: Role;
+  studentUserId?: ID;      // required when role === 'parent' (guardian code)
   expiresInHours?: number; // default 72
 }
 
 export interface IssueJoinCodeResponse {
   code: string; // human-typeable, e.g. ABCD-EF12
   role: Role;
+  studentUserId?: ID;
   expiresAt: number;
 }
 
