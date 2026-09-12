@@ -8,7 +8,22 @@
 import type { Request, Response } from 'express';
 import { ApiError } from '../http';
 import { findUserByUid, linkedStudentIds, setSessionClaims } from './claims';
+import { admin } from '../supabase';
 import type { Auth } from '@beacon5/shared';
+
+async function campusSummary(campusId: string): Promise<{ campusName: string; campusCode: string }> {
+  const { data, error } = await admin
+    .from('campuses')
+    .select('name, branding, code')
+    .eq('id', campusId)
+    .maybeSingle();
+  if (error) throw new Error(`campuses lookup: ${error.message}`);
+  const branding = (data?.branding ?? {}) as { displayName?: string };
+  return {
+    campusName: branding.displayName || (data?.name as string) || 'Campus',
+    campusCode: (data?.code as string) ?? '',
+  };
+}
 
 export async function postSession(req: Request, res: Response): Promise<void> {
   if (!req.user) throw new ApiError(401, 'AUTH_REQUIRED', 'No verified token');
@@ -29,11 +44,16 @@ export async function postSession(req: Request, res: Response): Promise<void> {
     linked = await linkedStudentIds(campusId, uid);
   }
 
-  await setSessionClaims(uid, { campusId, role: user.role });
+  const [{ campusName, campusCode }] = await Promise.all([
+    campusSummary(campusId),
+    setSessionClaims(uid, { campusId, role: user.role }),
+  ]);
 
   const body: Auth.SessionResponse = {
     uid: user.id,
     campusId,
+    campusName,
+    campusCode,
     role: user.role,
     displayName: user.display_name,
     isMinor: user.is_minor,

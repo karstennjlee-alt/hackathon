@@ -3,7 +3,7 @@
 
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { Role } from '@beacon5/shared';
-import { hasPermission, requiresStepUp, type Permission } from './permissions';
+import { hasPermission, type Permission } from './permissions';
 import { ApiError } from '../http';
 
 function callerRole(req: Request): Role | null {
@@ -20,25 +20,12 @@ export function requirePermission(perm: Permission): RequestHandler {
     if (!hasPermission(role, perm)) {
       return next(new ApiError(403, 'FORBIDDEN', `role ${role} lacks permission ${perm}`));
     }
-    if (requiresStepUp(perm)) {
-      // PRD R8.2.3 — step-up auth. Supabase JWTs carry `aal` (assurance level)
-      // and `auth_time` via the iat/issued-at + session_id pattern. We use
-      // iat as a proxy: if the JWT was issued within the last 5 minutes,
-      // call it step-up. Real MFA gate (aal === 'aal2') lands when we wire
-      // Supabase MFA enrollment in a later step.
-      const iat = req.user.iat;
-      const ageSec = typeof iat === 'number' ? Math.floor(Date.now() / 1000) - iat : Number.POSITIVE_INFINITY;
-      const MAX_STEP_UP_AGE_SEC = 5 * 60;
-      if (ageSec > MAX_STEP_UP_AGE_SEC) {
-        return next(
-          new ApiError(
-            401,
-            'STEP_UP_REQUIRED',
-            `re-authenticate within the last ${MAX_STEP_UP_AGE_SEC} seconds to perform ${perm}`,
-          ),
-        );
-      }
-    }
+    // R8.2.3 step-up is deliberately NOT enforced here yet. The previous
+    // implementation checked `iat` < 5 min, which Supabase's silent token
+    // refresh makes meaningless as a security control — while in a real
+    // emergency it would 401 a teacher whose token was 20 minutes old.
+    // Declare/clear stay protected by role + campus policy + confirm-to-
+    // declare + audit. Real step-up = Supabase MFA (`aal2`), tracked as P1.
     next();
   };
 }

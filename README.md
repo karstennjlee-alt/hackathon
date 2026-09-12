@@ -67,27 +67,27 @@ If you start either of the above and any required env var is missing, the env va
 
 ## What's done vs what's next
 
-This branch is at the end of **Phase 0 step 0** (scaffolding). See [TODO.md](TODO.md) for the full picture.
+See [TODO.md](TODO.md) for the requirement-level picture.
 
-**Done this session:**
-- v2 branch created
-- All Phase-0 planning docs written
-- Monorepo skeleton with `app/`, `admin/`, `server/`, `shared/`
-- 3 `.env.example` files (one per package, client-safe vs server-only firewall)
-- zod env validation that fails loud at boot
+**Working end-to-end against the dev Supabase project (verified in the simulator 2026-09-12):**
+- Student sign-in: campus code + student ID + PIN (no email). Staff/family: Apple, Google,
+  magic link (deep-linked into the app) or email + password.
+- Join a campus with a staff/admin code, create a new campus, or link a parent to a student
+  with a guardian code.
+- **Manage campus** (Settings, staff/admin): add students → PIN, reset PINs, parent codes,
+  staff/admin codes, campus code. Everything a school office needs, in the app.
+- Incident lifecycle: activate → location stream → reset/clear, mirrored to the server and
+  back to every device via Realtime. Campus threat declare/clear, chat, mass + staff
+  broadcasts, AI proxy with template fallback.
+- Server push (Expo Push) for beacon / threat / broadcasts / chat — needs a dev build.
+- Nightly purge of location traces per campus retention policy.
+- Migrations `001`–`006` applied. `npm test` runs the server unit tests.
 
-**Next session:**
-- Phase 0 step 1 — multi-tenant data model + Firestore/RTDB security rules scoped by `campusId`
-- Phase 0 step 2 — real auth (email/OTP + Apple + Google) with verified org binding
+**Setting up a school:** [SCHOOL_SETUP.md](SCHOOL_SETUP.md).
 
----
-
-## v1 (hackathon prototype)
-
-`git checkout main`. The 6000-line single-file Expo app that won 1st place at Synthesis Hacks lives there, untouched. Don't lose it.
-
----
-
-## Disclaimer
-
-Beacon5 supports — never replaces — 911 and the school's crisis plan. The product is designed to coordinate trained human responders, not to dispatch them.
+**Next:**
+- Zone editor on the admin screen (replaces the 4 built-in zones)
+- CSV roster import in the app
+- Real step-up auth (Supabase MFA `aal2`)
+- Split `App.tsx` into modules (step 7); remove `@ts-nocheck`
+- Store readiness (privacy labels, account deletion, background-location justification)

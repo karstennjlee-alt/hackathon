@@ -25,6 +25,8 @@ export interface SessionRequest {}
 export interface SessionResponse {
   uid: ID;
   campusId: ID;
+  campusName: string; // branding.displayName, falling back to campuses.name
+  campusCode: string; // short code students type at sign-in; shown to staff
   role: Role;
   displayName: string;
   isMinor: boolean;
@@ -46,9 +48,9 @@ export type JoinResponse = SessionResponse;
 
 // ──────────────────────────────────────────────────────────────────
 // POST /v1/auth/bootstrap
-// One-time-only. The first authed user in a fresh deployment creates
-// an Organization + Campus and becomes its first admin. Refuses after
-// any Organization exists.
+// Self-serve campus creation (DECISIONS.md D1). A signed-in account with
+// no campus membership creates an Organization + Campus and becomes its
+// first admin. Refuses if the account is already a member somewhere.
 // ──────────────────────────────────────────────────────────────────
 export interface BootstrapRequest {
   orgName: string;
@@ -63,13 +65,15 @@ export type BootstrapResponse = SessionResponse;
 // the route lands in the admin/roster module later)
 // ──────────────────────────────────────────────────────────────────
 export interface IssueJoinCodeRequest {
-  role: Exclude<Role, 'parent'>; // parents come via guardian links, not codes
+  role: Role;
+  studentUserId?: ID;      // required when role === 'parent' (guardian code)
   expiresInHours?: number; // default 72
 }
 
 export interface IssueJoinCodeResponse {
   code: string; // human-typeable, e.g. ABCD-EF12
   role: Role;
+  studentUserId?: ID;
   expiresAt: number;
 }
 

@@ -10,15 +10,8 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { initializeApp, getApps } from 'firebase/app';
-import {
-  getDatabase,
-  ref as dbRef,
-  onValue,
-  push as dbPush,
-  set as dbSet,
-  serverTimestamp,
-} from 'firebase/database';
+import { aiClarifyAlert, aiBrief, aiAllClear, aiPolishBroadcast } from './src/ai/client';
+import { subscribeToEvents, appendEvent, clearEvents } from './src/data/events';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -293,8 +286,22 @@ const staffRoster: StaffRosterEntry[] = [
 
 type Profile =
   | { role: 'student'; studentId: string; studentName: string }
-  | { role: 'staff'; staffId: string; staffName: string; staffTitle: string }
+  | { role: 'staff'; staffId: string; staffName: string; staffTitle: string; isAdmin?: boolean }
   | { role: 'parent'; linkedStudentId: string; linkedStudentName: string };
+
+// Real signed-in identity, built by AppRoot from the v2 session. When set,
+// the monolith skips the demo roster picker, signs out through Supabase,
+// shows the real campus name, and lets the server (RBAC + step-up) be the
+// gate on campus-threat actions instead of the demo password.
+export type AppIdentity = {
+  profile: Profile;
+  campusName: string;
+  // Short code students type at sign-in. Shown to staff so they can hand it out.
+  campusCode?: string;
+  signOut: () => void;
+  // Staff/admin: opens the in-app campus management screen (roster, PINs, codes).
+  openCampusAdmin?: () => void;
+};
 
 const PROFILE_STORAGE_KEY = 'beacon5.profile.v1';
 
@@ -389,117 +396,8 @@ type BeaconEvent =
 
 const PRINCIPAL_PASSWORD = 'cwb';
 
-const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  databaseURL: process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL,
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-};
-
-const firebaseApp =
-  getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-const database = getDatabase(firebaseApp);
-const EVENTS_PATH = 'beacon5/events';
-
-function subscribeToEvents(onEvents: (events: BeaconEvent[]) => void): () => void {
-  const eventsRef = dbRef(database, EVENTS_PATH);
-  const unsubscribe = onValue(
-    eventsRef,
-    (snapshot) => {
-      const val = snapshot.val();
-      if (!val || typeof val !== 'object') {
-        onEvents([]);
-        return;
-      }
-      const list = Object.values(val) as Array<BeaconEvent & { serverAt?: number }>;
-      list.sort((a, b) => {
-        const aTs = typeof a.serverAt === 'number' ? a.serverAt : a.at;
-        const bTs = typeof b.serverAt === 'number' ? b.serverAt : b.at;
-        return aTs - bTs;
-      });
-      onEvents(list);
-    },
-    (error) => {
-      console.warn('Firebase events subscription error:', error.message);
-      onEvents([]);
-    },
-  );
-  return () => unsubscribe();
-}
-
-const PENDING_EVENTS_KEY = 'beacon5.pendingEvents.v1';
-
-async function loadPendingEvents(): Promise<BeaconEvent[]> {
-  try {
-    const raw = await AsyncStorage.getItem(PENDING_EVENTS_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as BeaconEvent[];
-  } catch {
-    return [];
-  }
-}
-
-async function savePendingEvents(events: BeaconEvent[]): Promise<void> {
-  try {
-    if (events.length === 0) {
-      await AsyncStorage.removeItem(PENDING_EVENTS_KEY);
-    } else {
-      await AsyncStorage.setItem(PENDING_EVENTS_KEY, JSON.stringify(events.slice(-50)));
-    }
-  } catch {
-    // best effort
-  }
-}
-
-async function pushEventToFirebase(event: BeaconEvent): Promise<void> {
-  const eventsRef = dbRef(database, EVENTS_PATH);
-  await dbPush(eventsRef, { ...event, serverAt: serverTimestamp() });
-}
-
-let flushingQueue = false;
-async function flushPendingEvents(): Promise<void> {
-  if (flushingQueue) return;
-  flushingQueue = true;
-  try {
-    let pending = await loadPendingEvents();
-    while (pending.length > 0) {
-      const next = pending[0];
-      try {
-        await pushEventToFirebase(next);
-        pending = pending.slice(1);
-        await savePendingEvents(pending);
-      } catch {
-        // network still bad, stop trying for now
-        break;
-      }
-    }
-  } finally {
-    flushingQueue = false;
-  }
-}
-
-async function appendEvent(event: BeaconEvent): Promise<void> {
-  try {
-    await pushEventToFirebase(event);
-    flushPendingEvents().catch(() => undefined);
-  } catch (err) {
-    console.warn('Firebase appendEvent queued for retry:', err);
-    const pending = await loadPendingEvents();
-    await savePendingEvents([...pending, event]);
-  }
-}
-
-async function clearEvents(): Promise<void> {
-  try {
-    await dbSet(dbRef(database, EVENTS_PATH), null);
-    await savePendingEvents([]);
-  } catch (err) {
-    console.warn('Firebase clearEvents failed:', err);
-  }
-}
+// subscribeToEvents / appendEvent / clearEvents live in app/src/data/events.ts
+// (typed against BeaconEvent at every call-site via the generic parameter).
 
 // ============================================================================
 // BACKGROUND LOCATION TRACKING (requires EAS dev build — no-op in Expo Go)
@@ -713,7 +611,8 @@ async function sendChatMessage(
 const ADMIN_STAFF_ID = 'staff-whitman';
 
 function isAdminProfile(profile: Profile | null): boolean {
-  return profile?.role === 'staff' && profile.staffId === ADMIN_STAFF_ID;
+  if (profile?.role !== 'staff') return false;
+  return profile.isAdmin ?? profile.staffId === ADMIN_STAFF_ID;
 }
 
 const THEME_STORAGE_KEY = 'beacon5.theme.v1';
@@ -780,32 +679,21 @@ const paletteFor = (mode: 'dark' | 'light'): ThemePalette =>
 async function polishMassBroadcast(
   draft: string,
   audienceLabel: string,
-  senderName: string,
-  events: BeaconEvent[],
+  _senderName: string,
+  _events: BeaconEvent[],
   signal?: AbortSignal,
 ): Promise<string> {
   const trimmed = draft.trim();
   if (!trimmed) return trimmed;
-  const activeIncidents = deriveActiveIncidents(events);
-  const threatActive = isCampusThreatActive(events);
-  const recentNotes = events
-    .filter((e): e is Extract<BeaconEvent, { type: 'INCIDENT_NOTE' }> => e.type === 'INCIDENT_NOTE')
-    .slice(-4)
-    .map((n) => `- ${n.studentName} (${n.kind}): ${n.polishedNote}`)
-    .join('\n');
-  const activeList = activeIncidents
-    .map((i) => `- ${i.studentName} in ${i.zoneDescription ?? 'unknown area'}`)
-    .join('\n') || '(none)';
-  const prompt = `You are the official campus safety voice writing a mass broadcast for ${audienceLabel}. The admin ${senderName} drafted the message below. Rewrite it as a single calm, clear, official message based on the live situation. Be concise (max 2 short sentences, ~40 words). Include only facts that are present in the draft or the situation snapshot — never invent details. Do NOT mention 911/police/EMS. Do NOT start with "Update:" or "Attention:". Output ONLY the polished broadcast text, no preamble.
-
-Campus threat active: ${threatActive ? 'YES' : 'no'}
-Active beacons:
-${activeList}
-Recent reports:
-${recentNotes || '(none)'}
-
-Admin draft: "${trimmed}"`;
-  const result = await callGemini(prompt, signal);
+  const audience: 'students' | 'parents' | 'staff' | 'everyone' =
+    audienceLabel === 'students'
+      ? 'students'
+      : audienceLabel === 'parents'
+      ? 'parents'
+      : audienceLabel === 'teachers' || audienceLabel === 'staff'
+      ? 'staff'
+      : 'everyone';
+  const result = await aiPolishBroadcast({ draft: trimmed, audience }, signal);
   return result?.trim() || trimmed;
 }
 
@@ -857,13 +745,20 @@ async function sendMassBroadcast(
 // ============================================================================
 // NOTIFICATIONS
 // ============================================================================
+// Foreground: the app already raises LOCAL notifications for events it
+// sees live, so a server push (data.remote) arriving while active would
+// double up — show it silently in the list only. Background/killed is
+// exactly what the push is for; those are handled by the OS, not here.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (n) => {
+    const remote = n.request.content.data?.remote === true;
+    return {
+      shouldShowBanner: !remote,
+      shouldShowList: true,
+      shouldPlaySound: !remote,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 async function ensureNotificationPermission(): Promise<boolean> {
@@ -900,31 +795,6 @@ async function fireLocalNotification(
     });
   } catch {
     // best effort
-  }
-}
-
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '';
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
-async function callGemini(prompt: string, signal?: AbortSignal): Promise<string | null> {
-  if (!GEMINI_API_KEY) return null;
-  try {
-    const res = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 256 },
-      }),
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-    return typeof text === 'string' ? text.trim() : null;
-  } catch {
-    return null;
   }
 }
 
@@ -1002,21 +872,14 @@ async function polishIncidentNote(
       ? `${first} reports a threat. No details.`
       : `${first} reports a medical need. No details.`;
   }
-  const prompt = `You are a campus safety push notification writer. A student named ${studentName} just flagged a ${kind === 'threat' ? 'THREAT SIGHTING' : 'MEDICAL NEED'}.
-
-Compress their raw input into ONE alert that fits a phone lock-screen banner. STRICT requirements:
-- HARD MAX 12 words. Count them.
-- Lead with the student's first name.
-- Keep concrete details (weapons, body parts, locations, symptoms) - never invent any.
-- Drop filler words. No preamble, no quotes.
-- No police/911/EMS mention.
-
-Raw input: "${trimmed}"
-
-Output ONLY the alert text.`;
-  const result = await callGemini(prompt, signal);
+  const result = await aiClarifyAlert(
+    {
+      studentLabel: `${studentName} (${kind === 'threat' ? 'threat sighting' : 'medical need'})`,
+      context: trimmed,
+    },
+    signal,
+  );
   if (result) {
-    // Hard cap as safety net in case Gemini over-runs.
     const words = result.split(/\s+/);
     if (words.length > 14) return words.slice(0, 14).join(' ') + '...';
     return result;
@@ -1028,36 +891,14 @@ Output ONLY the alert text.`;
 async function generateAllClearBroadcast(
   studentName: string,
   zone: string,
-  coords: Coords | null,
-  zoneDescription: string | undefined,
+  _coords: Coords | null,
+  _zoneDescription: string | undefined,
   signal?: AbortSignal,
 ): Promise<string> {
-  const locationLine = coords
-    ? `GPS ${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)} (~${Math.round(coords.accuracy ?? 0)}m). ${zoneDescription ?? ''}`.trim()
-    : 'GPS not available.';
-  const prompt = `You are the calm official voice of campus safety staff at a high school. A student named ${studentName} just had an active beacon in ${zone}. ${locationLine}
-
-A school staff member has now marked the situation ALL CLEAR after on-site verification.
-
-Write the broadcast that goes to ${studentName} and their guardian. Requirements:
-- 2 short sentences, max 35 words total.
-- Calm, official, reassuring.
-- Confirm the all-clear, mention the student by first name, give one clear next step (e.g. "stay seated, you'll be released to your guardian shortly").
-- Do NOT mention police, EMS, or 911.
-- Do NOT use the word "AI".
-
-Output ONLY the broadcast text. No preamble.`;
-  const result = await callGemini(prompt, signal);
-  if (result) return result;
   const first = studentName.split(' ')[0];
-  return `All clear, ${first}. Staff have verified the area and you are safe. Please stay in place until a staff member or your guardian arrives.`;
-}
-
-async function reverseGeocodeWithGemini(coords: Coords, signal?: AbortSignal): Promise<string | null> {
-  const prompt = `You are a campus safety assistant. A student just activated an emergency beacon at these GPS coordinates: latitude ${coords.latitude.toFixed(6)}, longitude ${coords.longitude.toFixed(6)} (accuracy ~${coords.accuracy ?? 'unknown'}m).
-
-In ONE short sentence (max 18 words), describe the most likely physical area or landmark this corresponds to. Be concrete (e.g. "near the cafeteria entrance" or "on the north sidewalk along Main Street"). If you cannot determine specifics, say "Approximate area only - awaiting staff verification."`;
-  return callGemini(prompt, signal);
+  const fallback = `All clear, ${first}. Staff have verified the area and you are safe. Please stay in place until a staff member or your guardian arrives.`;
+  const text = await aiAllClear({ campusName: zone }, signal);
+  return text ?? fallback;
 }
 
 const computeZoneVerifications = (
@@ -1082,10 +923,14 @@ const computeZoneVerifications = (
   return map;
 };
 
-export default function App() {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [profileLoaded, setProfileLoaded] = useState(false);
-  const [reports, setReports] = useState<Report[]>(seedReports);
+export default function App({ identity = null }: { identity?: AppIdentity | null } = {}) {
+  const [profile, setProfile] = useState<Profile | null>(identity?.profile ?? null);
+  const [profileLoaded, setProfileLoaded] = useState(identity !== null);
+  // Demo mode ships fake reports so the staff view has something to show.
+  // A real campus starts empty — a seeded "Room 104 threat" would be a
+  // false alarm on a teacher's phone.
+  const initialReports = identity ? [] : seedReports;
+  const [reports, setReports] = useState<Report[]>(initialReports);
   const [incident, setIncident] = useState<Incident | null>(null);
   const [escalationSheet, setEscalationSheet] = useState<'threat' | 'medical' | null>(null);
   const [staffConfirmed, setStaffConfirmed] = useState<Set<string>>(new Set());
@@ -1098,7 +943,9 @@ export default function App() {
   const lastNotifiedNoteRef = useRef<string | null>(null);
   const lastNotifiedChatRef = useRef<string | null>(null);
   const lastNotifiedMassRef = useRef<string | null>(null);
+  const lastThreatHandledRef = useRef<string | null>(null);
   const watchSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
+  const allClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [themeMode, setThemeMode] = useState<'dark' | 'light'>('dark');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1107,10 +954,18 @@ export default function App() {
   const mode: Mode = profile?.role ?? 'student';
 
   useEffect(() => {
-    loadProfile().then((p) => {
-      setProfile(p);
+    if (identity) {
+      setProfile(identity.profile);
       setProfileLoaded(true);
-    });
+    } else {
+      loadProfile().then((p) => {
+        setProfile(p);
+        setProfileLoaded(true);
+      });
+    }
+  }, [identity]);
+
+  useEffect(() => {
     loadThemeMode().then(setThemeMode);
   }, []);
 
@@ -1136,15 +991,16 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => subscribeToEvents(setEvents), []);
+
+  // Clear the all-clear wipe timer on unmount so a sign-out or app close
+  // mid-window doesn't fire stale resets a few seconds later.
   useEffect(() => {
-    const unsubscribe = subscribeToEvents(setEvents);
-    flushPendingEvents().catch(() => undefined);
-    const retryId = setInterval(() => {
-      flushPendingEvents().catch(() => undefined);
-    }, 8000);
     return () => {
-      unsubscribe();
-      clearInterval(retryId);
+      if (allClearTimeoutRef.current) {
+        clearTimeout(allClearTimeoutRef.current);
+        allClearTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -1280,21 +1136,33 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
   };
 
-  const onResetProfile = () => {
-    setProfile(null);
-    setIncident(null);
-    setReports(seedReports);
-    setStaffConfirmed(new Set());
+  const resetAllNotifRefs = () => {
     lastNotifiedBroadcastRef.current = null;
     lastNotifiedIncidentRef.current = null;
+    lastNotifiedNoteRef.current = null;
+    lastNotifiedChatRef.current = null;
+    lastNotifiedMassRef.current = null;
+    lastThreatHandledRef.current = null;
+  };
+
+  const onResetProfile = () => {
+    setIncident(null);
+    setReports(initialReports);
+    setStaffConfirmed(new Set());
+    resetAllNotifRefs();
+    if (identity) {
+      // Real session: AppRoot tears the tree down once Supabase signs out.
+      identity.signOut();
+      return;
+    }
+    setProfile(null);
     clearProfile().catch(() => undefined);
   };
 
   const onWipeEvents = () => {
     setEvents([]);
     clearEvents().catch(() => undefined);
-    lastNotifiedBroadcastRef.current = null;
-    lastNotifiedIncidentRef.current = null;
+    resetAllNotifRefs();
   };
 
   const onAllClear = async (incidentEv: Extract<BeaconEvent, { type: 'BEACON_ACTIVATED' }>) => {
@@ -1321,18 +1189,15 @@ export default function App() {
       await appendEvent(broadcast);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       // Let the all-clear card render on every device, then wipe everything.
-      setTimeout(() => {
+      if (allClearTimeoutRef.current) clearTimeout(allClearTimeoutRef.current);
+      allClearTimeoutRef.current = setTimeout(() => {
+        allClearTimeoutRef.current = null;
         clearEvents().catch(() => undefined);
         setEvents([]);
         setIncident(null);
-        setReports(seedReports);
+        setReports(initialReports);
         setStaffConfirmed(new Set());
-        lastNotifiedBroadcastRef.current = null;
-        lastNotifiedIncidentRef.current = null;
-        lastNotifiedNoteRef.current = null;
-        lastNotifiedChatRef.current = null;
-        lastNotifiedMassRef.current = null;
-        lastThreatHandledRef.current = null;
+        resetAllNotifRefs();
       }, 6000);
     } finally {
       setGeneratingBroadcast(false);
@@ -1347,7 +1212,6 @@ export default function App() {
   );
 
   const campusThreatActive = useMemo(() => isCampusThreatActive(events), [events]);
-  const lastThreatHandledRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!profile) return;
@@ -1506,15 +1370,8 @@ export default function App() {
           lastAccuracy: lastAcceptedAccuracy,
         }).catch(() => undefined);
 
-        if (coords) {
-          const description = await reverseGeocodeWithGemini(coords);
-          if (description) {
-            zoneDescription = description;
-            setIncident((cur) =>
-              cur && cur.id === id ? { ...cur, zoneDescription: description } : cur,
-            );
-          }
-        }
+        // Reverse-geocoding now lives server-side (planned via Google Geocoding
+        // API). For now the GPS coords stand on their own.
       }
     } catch (err) {
       setIncident((cur) =>
@@ -1685,13 +1542,20 @@ export default function App() {
           mode={mode}
           locationToken={mode === 'parent' && parentActiveIncident ? 'active' : locationToken}
           profile={profile}
+          campusName={identity?.campusName}
+          campusCode={identity?.campusCode}
           onSignOut={onResetProfile}
           notifPermitted={notifPermitted}
           onOpenSettings={() => setSettingsOpen(true)}
           themeMode={themeMode}
         />
         {showCampusBanner ? (
-          <View style={styles.campusBanner}>
+          <View
+            style={styles.campusBanner}
+            accessibilityRole="alert"
+            accessibilityLiveRegion="assertive"
+            accessibilityLabel={`Campus threat active, tracking all students, declared by ${latestThreat!.actorName.split(' ').slice(-1)[0]}`}
+          >
             <AlertTriangle color="#fff" size={18} strokeWidth={3} />
             <Text style={styles.campusBannerText}>CAMPUS THREAT ACTIVE — TRACKING ALL STUDENTS</Text>
             <Text style={styles.campusBannerBy}>{latestThreat!.actorName.split(' ').slice(-1)[0]}</Text>
@@ -1714,6 +1578,7 @@ export default function App() {
         {mode === 'staff' ? (
           <StaffMode
             profile={profile as Extract<Profile, { role: 'staff' }>}
+            campusName={identity?.campusName}
             metrics={metrics}
             reports={reports}
             verifications={verifications}
@@ -1725,7 +1590,7 @@ export default function App() {
             onSimulate={simulateNearbyReport}
             onMarkConfirmed={markStaffConfirmed}
             onAllClear={onAllClear}
-            onWipeEvents={onWipeEvents}
+            onWipeEvents={identity ? undefined : onWipeEvents}
             campusThreatActive={showCampusBanner}
             onOpenThreatModal={() => setThreatModalOpen(true)}
             themeMode={themeMode}
@@ -1759,11 +1624,13 @@ export default function App() {
           setSettingsOpen(false);
           onResetProfile();
         }}
-        onWipeEvents={onWipeEvents}
+        onWipeEvents={identity ? undefined : onWipeEvents}
+        onManageCampus={identity?.openCampusAdmin}
       />
       <ThreatPasswordModal
         visible={threatModalOpen}
         threatActive={showCampusBanner}
+        requirePassword={identity === null}
         onClose={() => setThreatModalOpen(false)}
         onConfirm={async () => {
           setThreatModalOpen(false);
@@ -1782,21 +1649,23 @@ function SettingsSheet({
   onChangeTheme,
   onSignOut,
   onWipeEvents,
+  onManageCampus,
 }: {
   visible: boolean;
   onClose: () => void;
   themeMode: 'dark' | 'light';
   onChangeTheme: (m: 'dark' | 'light') => void;
   onSignOut: () => void;
-  onWipeEvents: () => void;
+  onWipeEvents?: () => void;
+  onManageCampus?: () => void;
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.pwModalBackdrop} onPress={onClose}>
         <Pressable style={styles.pwModalCard} onPress={() => undefined}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={styles.pwModalTitle}>Settings</Text>
-            <Pressable onPress={onClose} hitSlop={12}>
+            <Text style={styles.pwModalTitle} accessibilityRole="header">Settings</Text>
+            <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close settings">
               <X color="#f4f4f5" size={20} />
             </Pressable>
           </View>
@@ -1805,6 +1674,9 @@ function SettingsSheet({
             <Text style={styles.settingsRowLabel}>Appearance</Text>
             <Pressable
               onPress={() => onChangeTheme('dark')}
+              accessibilityRole="radio"
+              accessibilityLabel="Dark appearance"
+              accessibilityState={{ selected: themeMode === 'dark' }}
               style={[styles.themeChip, themeMode === 'dark' ? styles.themeChipActive : styles.themeChipInactive]}
             >
               <Text style={[styles.themeChipText, { color: themeMode === 'dark' ? '#7dd3fc' : '#a1a1aa' }]}>
@@ -1813,6 +1685,9 @@ function SettingsSheet({
             </Pressable>
             <Pressable
               onPress={() => onChangeTheme('light')}
+              accessibilityRole="radio"
+              accessibilityLabel="Light appearance"
+              accessibilityState={{ selected: themeMode === 'light' }}
               style={[styles.themeChip, themeMode === 'light' ? styles.themeChipActive : styles.themeChipInactive]}
             >
               <Text style={[styles.themeChipText, { color: themeMode === 'light' ? '#7dd3fc' : '#a1a1aa' }]}>
@@ -1821,12 +1696,29 @@ function SettingsSheet({
             </Pressable>
           </View>
 
-          <Pressable onPress={onWipeEvents} style={styles.settingsRow}>
-            <RefreshCcw color="#a1a1aa" size={16} />
-            <Text style={styles.settingsRowLabel}>Reset demo events</Text>
-          </Pressable>
+          {onManageCampus ? (
+            <Pressable
+              onPress={() => {
+                onClose();
+                onManageCampus();
+              }}
+              style={styles.settingsRow}
+              accessibilityRole="button"
+              accessibilityLabel="Manage campus"
+            >
+              <UsersRound color="#7dd3fc" size={16} />
+              <Text style={[styles.settingsRowLabel, { color: '#7dd3fc' }]}>Manage campus — roster, PINs, codes</Text>
+            </Pressable>
+          ) : null}
 
-          <Pressable onPress={onSignOut} style={styles.settingsRow}>
+          {onWipeEvents ? (
+            <Pressable onPress={onWipeEvents} style={styles.settingsRow} accessibilityRole="button" accessibilityLabel="Reset demo events">
+              <RefreshCcw color="#a1a1aa" size={16} />
+              <Text style={styles.settingsRowLabel}>Reset demo events</Text>
+            </Pressable>
+          ) : null}
+
+          <Pressable onPress={onSignOut} style={styles.settingsRow} accessibilityRole="button" accessibilityLabel="Sign out">
             <LogOut color="#fb7185" size={16} />
             <Text style={[styles.settingsRowLabel, { color: '#fb7185' }]}>Sign out</Text>
           </Pressable>
@@ -1839,11 +1731,15 @@ function SettingsSheet({
 function ThreatPasswordModal({
   visible,
   threatActive,
+  requirePassword = true,
   onClose,
   onConfirm,
 }: {
   visible: boolean;
   threatActive: boolean;
+  // Demo mode only. Signed-in users are gated server-side by RBAC +
+  // campus policy + step-up; the modal is then a plain confirm (R8.4.5).
+  requirePassword?: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void>;
 }) {
@@ -1859,7 +1755,7 @@ function ThreatPasswordModal({
   }, [visible]);
   const submit = async () => {
     if (busy) return;
-    if (pw.trim() !== PRINCIPAL_PASSWORD) {
+    if (requirePassword && pw.trim() !== PRINCIPAL_PASSWORD) {
       setError('Incorrect password.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       return;
@@ -1876,28 +1772,39 @@ function ThreatPasswordModal({
           </Text>
           <Text style={styles.pwModalCopy}>
             {threatActive
-              ? 'Clearing the threat stops live tracking on every student device. Enter the principal password to confirm.'
-              : 'Declaring a campus threat unlocks live GPS sharing on every student device and notifies guardians instantly. Enter the principal password to confirm.'}
+              ? 'Clearing the threat stops live tracking on every student device.'
+              : 'Declaring a campus threat unlocks live GPS sharing on every student device and notifies guardians instantly.'}
+            {requirePassword ? ' Enter the principal password to confirm.' : ' This action is logged with your name.'}
           </Text>
-          <TextInput
-            value={pw}
-            onChangeText={(t) => {
-              setPw(t);
-              setError(null);
-            }}
-            placeholder="Principal password"
-            placeholderTextColor="#71717a"
-            secureTextEntry
-            autoFocus
-            style={styles.pwInput}
-            onSubmitEditing={submit}
-          />
-          {error ? <Text style={styles.pwError}>{error}</Text> : null}
+          {requirePassword ? (
+            <TextInput
+              value={pw}
+              onChangeText={(t) => {
+                setPw(t);
+                setError(null);
+              }}
+              placeholder="Principal password"
+              placeholderTextColor="#71717a"
+              secureTextEntry
+              autoFocus
+              style={styles.pwInput}
+              onSubmitEditing={submit}
+              accessibilityLabel="Principal password"
+            />
+          ) : null}
+          {error ? <Text style={styles.pwError} accessibilityLiveRegion="polite" accessibilityRole="alert">{error}</Text> : null}
           <View style={styles.pwActions}>
-            <Pressable onPress={onClose} style={styles.pwCancel}>
+            <Pressable onPress={onClose} style={styles.pwCancel} accessibilityRole="button" accessibilityLabel="Cancel">
               <Text style={styles.pwCancelText}>Cancel</Text>
             </Pressable>
-            <Pressable onPress={submit} disabled={busy} style={styles.pwConfirm}>
+            <Pressable
+              onPress={submit}
+              disabled={busy}
+              style={styles.pwConfirm}
+              accessibilityRole="button"
+              accessibilityLabel={threatActive ? 'Confirm clear threat' : 'Confirm declare threat'}
+              accessibilityState={{ disabled: busy, busy }}
+            >
               <Text style={styles.pwConfirmText}>
                 {busy ? '...' : threatActive ? 'Clear threat' : 'Declare threat'}
               </Text>
@@ -2031,6 +1938,9 @@ function RoleCard({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityHint={subtitle}
       style={({ pressed }) => [
         styles.roleCard,
         { borderColor: `${color}66` },
@@ -2069,13 +1979,18 @@ function RosterPicker({
 }) {
   return (
     <ScrollView contentContainerStyle={styles.onboardScroll} showsVerticalScrollIndicator={false}>
-      <Pressable onPress={onBack} style={({ pressed }) => [styles.backRow, pressed && styles.pressed]}>
+      <Pressable
+        onPress={onBack}
+        accessibilityRole="button"
+        accessibilityLabel="Back"
+        style={({ pressed }) => [styles.backRow, pressed && styles.pressed]}
+      >
         <ChevronRight color="#9ca3af" size={16} style={{ transform: [{ rotate: '180deg' }] }} />
         <Text style={styles.backText}>Back</Text>
       </Pressable>
 
       <View style={styles.onboardHero}>
-        <Text style={styles.onboardTitle}>{title}</Text>
+        <Text style={styles.onboardTitle} accessibilityRole="header">{title}</Text>
         <Text style={styles.onboardCopy}>{subtitle}</Text>
       </View>
 
@@ -2106,6 +2021,8 @@ function Header({
   mode,
   locationToken,
   profile,
+  campusName,
+  campusCode,
   onSignOut,
   onOpenSettings,
   themeMode,
@@ -2113,6 +2030,8 @@ function Header({
   mode: Mode;
   locationToken: LocationToken;
   profile: Profile;
+  campusName?: string;
+  campusCode?: string;
   onSignOut: () => void;
   notifPermitted?: boolean;
   onOpenSettings?: () => void;
@@ -2128,9 +2047,9 @@ function Header({
         : `Guardian of ${profile.linkedStudentName}`;
   const subtitle =
     mode === 'student'
-      ? 'Campus Grid - San Jose High'
+      ? `Campus Grid - ${campusName ?? 'San Jose High'}`
       : mode === 'staff'
-        ? 'Mission Control - Live'
+        ? `Mission Control${campusCode ? ` · Code ${campusCode}` : ' - Live'}`
         : 'Parent Verification Secure';
 
   const tokenColor = locationToken === 'active' ? '#fb7185' : '#8ee7ff';
@@ -2170,7 +2089,8 @@ function Header({
               isLight && { borderColor: 'rgba(15,23,42,0.24)', backgroundColor: 'rgba(15,23,42,0.04)' },
               pressed && styles.pressed,
             ]}
-            accessibilityLabel="Settings"
+            accessibilityRole="button"
+            accessibilityLabel="Open settings"
           >
             <SettingsIcon color={isLight ? '#0f172a' : '#cfc4c5'} size={16} />
           </Pressable>
@@ -2413,6 +2333,10 @@ function HoldToActivate({ onComplete }: { onComplete: () => void }) {
       <Pressable
         onPressIn={startHold}
         onPressOut={cancelHold}
+        accessibilityRole="button"
+        accessibilityLabel="Hold to activate emergency beacon"
+        accessibilityHint="Press and hold for one second to alert campus staff and your guardian"
+        accessibilityState={{ busy: holding }}
         style={({ pressed }) => [
           styles.holdButton,
           {
@@ -2513,7 +2437,13 @@ function SurvivalAnchor({
         />
       </View>
 
-      <Pressable style={styles.resetGhost} onPress={onReset}>
+      <Pressable
+        style={styles.resetGhost}
+        onPress={onReset}
+        accessibilityRole="button"
+        accessibilityLabel="All clear, reset beacon"
+        accessibilityHint="Clears your active emergency beacon"
+      >
         <Text style={styles.resetGhostText}>All clear - reset beacon</Text>
       </Pressable>
     </ScrollView>
@@ -2539,7 +2469,12 @@ function BroadcastCard({
 }) {
   const accent = broadcast.kind === 'all_clear' ? '#22c55e' : '#7dd3fc';
   return (
-    <View style={[styles.broadcastCard, { borderColor: `${accent}66`, backgroundColor: `${accent}14` }]}>
+    <View
+      style={[styles.broadcastCard, { borderColor: `${accent}66`, backgroundColor: `${accent}14` }]}
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={`${broadcast.kind === 'all_clear' ? 'All clear, staff update' : 'Staff update'}: ${broadcast.message}`}
+    >
       <View style={[styles.broadcastBadge, { backgroundColor: `${accent}33`, borderColor: `${accent}88` }]}>
         <Sparkles color={accent} size={18} />
       </View>
@@ -2828,10 +2763,14 @@ function ChatPanel({
               style={styles.chatInput}
               multiline
               maxLength={400}
+              accessibilityLabel={`Message to ${peerLabel.toLowerCase()}`}
             />
             <Pressable
               onPress={send}
               disabled={!draft.trim()}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{ disabled: !draft.trim() }}
               style={({ pressed }) => [
                 styles.chatSendButton,
                 { opacity: draft.trim() ? 1 : 0.4 },
@@ -2936,6 +2875,9 @@ function MassComposer({
             <Pressable
               key={a.key}
               onPress={() => togglePill(a.key)}
+              accessibilityRole="checkbox"
+              accessibilityLabel={`Send to ${a.label.toLowerCase()}`}
+              accessibilityState={{ checked: on }}
               style={({ pressed }) => [
                 styles.massAudienceChip,
                 on
@@ -2961,6 +2903,9 @@ function MassComposer({
         <Pressable
           key="everyone"
           onPress={toggleEveryone}
+          accessibilityRole="checkbox"
+          accessibilityLabel="Send to everyone"
+          accessibilityState={{ checked: everyoneOn }}
           style={({ pressed }) => [
             styles.massAudienceChip,
             everyoneOn
@@ -2999,10 +2944,14 @@ function MassComposer({
           style={styles.chatInput}
           multiline
           maxLength={400}
+          accessibilityLabel="Campus-wide broadcast message"
         />
         <Pressable
           onPress={send}
           disabled={!draft.trim() || sending || selected.size === 0}
+          accessibilityRole="button"
+          accessibilityLabel={sending ? 'Sending broadcast' : 'Send campus-wide broadcast'}
+          accessibilityState={{ disabled: !draft.trim() || sending || selected.size === 0, busy: sending }}
           style={({ pressed }) => {
             const canSend = draft.trim() && !sending && selected.size > 0;
             return [
@@ -3201,6 +3150,9 @@ function EscalationChip({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}${flagged ? ', reported' : ''}`}
+      accessibilityState={{ selected: flagged }}
       style={({ pressed }) => [
         styles.escalChip,
         {
@@ -3231,6 +3183,7 @@ function NoteCard({ label, text, accent }: { label: string; text: string; accent
 // =====================================================================
 function StaffMode({
   profile,
+  campusName,
   now,
   activeIncidents,
   events,
@@ -3242,6 +3195,7 @@ function StaffMode({
   themeMode,
 }: {
   profile: Extract<Profile, { role: 'staff' }>;
+  campusName?: string;
   metrics: Record<StatusKey, number>;
   reports: Report[];
   verifications: Map<string, VerificationState>;
@@ -3253,7 +3207,7 @@ function StaffMode({
   onSimulate: () => void;
   onMarkConfirmed: (zoneKey: string) => void;
   onAllClear: (incident: Extract<BeaconEvent, { type: 'BEACON_ACTIVATED' }>) => Promise<void>;
-  onWipeEvents: () => void;
+  onWipeEvents?: () => void;
   campusThreatActive: boolean;
   onOpenThreatModal: () => void;
   themeMode?: 'dark' | 'light';
@@ -3283,15 +3237,15 @@ function StaffMode({
       setGeminiText(null);
       return () => controller.abort();
     }
-    const prompt = `You are the calm campus safety commander brief. ONE sentence (max 22 words). State who activated a beacon, where, and the single next operational step staff should take. Do NOT mention 911/police/EMS.
-
-Student: ${top.studentName}
-GPS: ${top.coords ? `${top.coords.latitude.toFixed(5)}, ${top.coords.longitude.toFixed(5)}` : 'unavailable'}
-Area: ${top.zoneDescription ?? 'unknown'}
-
-Output ONLY the brief sentence.`;
+    const briefInput = {
+      incidentType: `Beacon activated by ${top.studentName}`,
+      campusName: campusName ?? 'campus',
+      location: top.zoneDescription ?? (top.coords
+        ? `GPS ${top.coords.latitude.toFixed(5)}, ${top.coords.longitude.toFixed(5)}`
+        : 'unknown'),
+    };
     const timer = setTimeout(() => {
-      callGemini(prompt, controller.signal).then((text) => {
+      aiBrief(briefInput, controller.signal).then((text) => {
         if (!controller.signal.aborted) setGeminiText(text);
       });
     }, 400);
@@ -3319,6 +3273,13 @@ Output ONLY the brief sentence.`;
     >
       <Pressable
         onPress={onOpenThreatModal}
+        accessibilityRole="button"
+        accessibilityLabel={campusThreatActive ? 'Clear campus threat' : 'Declare campus threat'}
+        accessibilityHint={
+          campusThreatActive
+            ? 'Stops live student tracking after principal password confirmation'
+            : 'Starts live student tracking after principal password confirmation'
+        }
         style={({ pressed }) => [
           styles.threatBigButton,
           campusThreatActive && styles.threatBigButtonActive,
@@ -3500,10 +3461,12 @@ Output ONLY the brief sentence.`;
         onToggle={() => setMassCollapsed((c) => !c)}
       />
 
-      <Pressable onPress={onWipeEvents} style={({ pressed }) => [styles.wipeButton, pressed && styles.pressed]}>
-        <RefreshCcw color="#a1a1aa" size={12} />
-        <Text style={styles.wipeText}>Reset demo events</Text>
-      </Pressable>
+      {onWipeEvents ? (
+        <Pressable onPress={onWipeEvents} style={({ pressed }) => [styles.wipeButton, pressed && styles.pressed]}>
+          <RefreshCcw color="#a1a1aa" size={12} />
+          <Text style={styles.wipeText}>Reset demo events</Text>
+        </Pressable>
+      ) : null}
     </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -4070,7 +4033,14 @@ function ModeNav({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => voi
         const active = mode === item.mode;
         const Icon = item.icon;
         return (
-          <Pressable key={item.mode} onPress={() => onChange(item.mode)} style={styles.modeItem}>
+          <Pressable
+            key={item.mode}
+            onPress={() => onChange(item.mode)}
+            accessibilityRole="tab"
+            accessibilityLabel={`${item.label} view`}
+            accessibilityState={{ selected: active }}
+            style={styles.modeItem}
+          >
             <View style={[styles.modeIconShell, active && styles.modeIconActive]}>
               <Icon color={active ? '#ffffff' : '#8f8f93'} size={22} />
             </View>
@@ -4177,6 +4147,8 @@ function EscalationSheet({
             <Pressable
               onPress={onClose}
               hitSlop={16}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
               style={({ pressed }) => [styles.fullSheetClose, pressed && styles.pressed]}
             >
               <X color="#f4f4f5" size={22} strokeWidth={2.4} />
@@ -4190,7 +4162,7 @@ function EscalationSheet({
               >
                 <Icon color={accent} size={20} />
               </View>
-              <Text style={styles.fullSheetTitle}>
+              <Text style={styles.fullSheetTitle} accessibilityRole="header">
                 {isThreat ? 'I see a threat' : 'Medical needed'}
               </Text>
             </View>
@@ -4214,6 +4186,9 @@ function EscalationSheet({
                   <Pressable
                     key={p}
                     onPress={() => togglePreset(p)}
+                    accessibilityRole="checkbox"
+                    accessibilityLabel={p}
+                    accessibilityState={{ checked: on }}
                     style={({ pressed }) => [
                       styles.presetTile,
                       {
@@ -4241,6 +4216,7 @@ function EscalationSheet({
               autoCorrect
               returnKeyType="done"
               blurOnSubmit
+              accessibilityLabel="Additional note for staff"
             />
 
             {combinedNote ? (
@@ -4255,6 +4231,9 @@ function EscalationSheet({
             <Pressable
               onPress={submit}
               disabled={!canSubmit}
+              accessibilityRole="button"
+              accessibilityLabel={submitting ? 'Sending' : 'Share with staff and guardian'}
+              accessibilityState={{ disabled: !canSubmit, busy: submitting }}
               style={({ pressed }) => [
                 styles.fullSheetSubmit,
                 { backgroundColor: accent, opacity: canSubmit ? 1 : 0.4 },

@@ -4,7 +4,7 @@ Every R8.x.x and Gx from [PRD.md](PRD.md), with current status. Update as we shi
 
 **Statuses:** ⬜ not-started · 🟡 in-progress · ✅ done · 🟢 v1 carried forward (works in monolith, still needs server move) · 🚫 P1/P2 (not this phase)
 
-Last refreshed: end of scaffolding session.
+Last refreshed: 2026-09-12 (school-ready sprint: student PINs, parents, admin screen, push).
 
 ---
 
@@ -12,9 +12,9 @@ Last refreshed: end of scaffolding session.
 
 | # | Gap | Status | Notes |
 |---|---|---|---|
-| G1 | No real authentication | 🟡 | Server auth scaffolded — `/v1/auth/{session,join,bootstrap,join-codes}` with custom claims. App client integration is next session. |
+| G1 | No real authentication | 🟡 | Server auth live + app wired: `JoinCampusScreen` (join code / create campus), monolith driven by the real identity via `AppIdentity` (no roster picker when signed in). Demo mode gated on `EXPO_PUBLIC_DEMO`. Guardian linking still ⬜. |
 | G2 | Secrets in client bundle | ⬜ | Replaced by AI proxy + KMS — Phase 0 step 5 |
-| G3 | Hard-coded `'cwb'` password | 🟡 | RBAC matrix + `requirePermission` + step-up (auth_time ≤ 5 min) shipped server-side; gates apply once incident/threat routes land in step 4. |
+| G3 | Hard-coded `'cwb'` password | 🟡 | Password only in demo mode; signed-in staff get a plain confirm and the server (RBAC + campus policy) is the gate. Step-up is still `iat`-based — **not real** until MFA/re-auth lands. |
 | G4 | Global event log | 🟡 | Postgres schema + RLS shipped in `supabase/migrations/001_init.sql`. Apply via Supabase dashboard SQL editor; takes effect immediately. |
 | G5 | Hard-coded campus/zones/roster | ⬜ | Replaced by config-driven UI + admin console — steps 7 + 11 |
 | G6 | No privacy/compliance controls | ⬜ | Compliance program — step 12 |
@@ -29,10 +29,10 @@ Last refreshed: end of scaffolding session.
 
 | Req | Status | Note |
 |---|---|---|
-| R8.1.1 — email/OTP + Apple + Google | 🟡 | App SignInScreen + signIn.ts ships all three flows. Magic-link works zero-config in Supabase. Google + Apple need provider credentials configured in Supabase dashboard (KEYS.md §4 §5). |
+| R8.1.1 — email/OTP + Apple + Google | ✅ | Plus student ID + PIN (`/v1/auth/student-login`) and email + password. Magic links deep-link into the app (`token_hash`). Google + Apple still need provider credentials in the dashboard. |
 | R8.1.2 — bound to one verified org + role; never self-selected | 🟡 | Enforced server-side in `join` + `bootstrap`: collectionGroup check before insert; role comes from code, not request body. |
-| R8.1.3 — invitation/verification-gated join | 🟡 | Join codes shipped (`/v1/auth/join-codes` + `/v1/auth/join`); domain-verified email + roster import are P1. |
-| R8.1.4 — verified guardian linking | ⬜ | Contract drafted in `shared/src/auth/`; endpoint lands next session. |
+| R8.1.3 — invitation/verification-gated join | 🟡 | Join codes work end-to-end (FK bug fixed in `003`); app has the entry screen. Domain-verified email + roster import are P1. |
+| R8.1.4 — verified guardian linking | ✅ | Guardian codes (join code with role='parent' + student) create the parent and a verified `guardian_links` row. Issued from the admin screen. |
 | R8.1.5 — `expo-secure-store` tokens, refresh, server revocation | 🟡 | Supabase persists session in AsyncStorage today; moving to expo-secure-store is a one-line swap (`storage` option). Auto-refresh on. Server revocation via Supabase Admin SDK. |
 | R8.1.6 — recovery cannot hijack role-bearing identity | ⬜ | Future. Today: deletion + re-bootstrap is admin-only. |
 | R8.1.7 — minor handling + FERPA school-official path | 🟡 | `isMinor` flag set true for students in `joinCode.ts`; full FERPA pathway via admin console (step 11). |
@@ -44,7 +44,7 @@ Last refreshed: end of scaffolding session.
 |---|---|---|
 | R8.2.1 — server-enforced permissions | 🟡 | `requireCampusMember` + `requirePermission(perm)` middleware shipped; routes adopt them in step 4. |
 | R8.2.2 — baseline permission matrix | 🟢 | Encoded in [`server/src/rbac/permissions.ts`](server/src/rbac/permissions.ts). |
-| R8.2.3 — step-up auth for declare/clear/everyone broadcast | 🟡 | `requirePermission` checks `auth_time` ≤ 5 min for STEP_UP_PERMISSIONS; client re-auth flow lands in step 4. |
+| R8.2.3 — step-up auth for declare/clear/everyone broadcast | ⬜ | Fake `iat` gate removed (it could 401 a teacher mid-emergency). Confirm + role + policy + audit remain. Needs Supabase MFA `aal2`. |
 | R8.2.4 — who-can-declare-threat is org-configurable | ⬜ | per [DECISIONS.md D4](DECISIONS.md): default `any-staff` |
 
 ## §8.3 Multi-tenancy
@@ -76,7 +76,7 @@ Last refreshed: end of scaffolding session.
 | R8.5.4 — preset chips + freeform + AI-clarified | 🟢 | server move |
 | R8.5.5 — self-status "I'm safe / hidden / barricaded" | 🚫 | P1 |
 | R8.5.6 — silent by default on student device | 🟢 | already silent in v1 |
-| R8.5.7 — reset (self or staff) | 🟢 | keep |
+| R8.5.7 — reset (self or staff) | ✅ | `POST /v1/incidents/:id/reset` (owner or staff) + realtime UPDATE → `BEACON_RESET` on every device |
 
 ## §8.6 Location
 
@@ -114,9 +114,9 @@ Last refreshed: end of scaffolding session.
 
 | Req | Status | Note |
 |---|---|---|
-| R8.9.1 — server push (APNs/FCM via Expo Push or direct) | ⬜ | replaces v1 local-only |
-| R8.9.2 — critical/time-sensitive delivery for threat + beacon | ⬜ | per [DECISIONS.md D5](DECISIONS.md): time-sensitive only at launch |
-| R8.9.3 — per-event types covered | ⬜ | mirror v1 taxonomy |
+| R8.9.1 — server push (APNs/FCM via Expo Push or direct) | 🟡 | `server/src/push/expo.ts` + `/v1/devices`; app registers after sign-in. Needs a dev build + EAS project id to receive. |
+| R8.9.2 — critical/time-sensitive delivery for threat + beacon | 🟡 | `interruptionLevel: time-sensitive` + Android `emergency` channel for threat/beacon pushes. |
+| R8.9.3 — per-event types covered | ✅ | beacon → staff + guardians; threat declare/clear → campus; mass → audience; chat → other side; staff broadcast → student + guardians. |
 | R8.9.4 — minimized content, audience-scoped | ⬜ | |
 
 ## §8.10 Admin console (web)
@@ -124,7 +124,7 @@ Last refreshed: end of scaffolding session.
 | Req | Status | Note |
 |---|---|---|
 | R8.10.1 — org/campus creation + settings | ⬜ | |
-| R8.10.2 — roster management + join codes + guardian-link approval | ⬜ | |
+| R8.10.2 — roster management + join codes + guardian-link approval | 🟡 | In-app `CampusAdminScreen`: add students (PIN), reset PIN, parent codes, staff/admin codes. CSV import ⬜. |
 | R8.10.3 — zone editor with geo/coords (replaces v1's 4 hardcoded) | ⬜ | |
 | R8.10.4 — branding (display name, logo, colors) | ⬜ | replaces "San Jose High" |
 | R8.10.5 — policy config (who-declares, audiences, retention, location policy, language, 911-toggle default OFF) | ⬜ | |
@@ -153,7 +153,7 @@ Last refreshed: end of scaffolding session.
 | Postgres + RLS scoped by `campus_id` (via Supabase) | 🟡 | step 1 — schema + RLS policies in `supabase/migrations/001_init.sql`. Realtime replication enabled on incidents/threats/messages/location_points. |
 | AI proxy with KMS keys + provider-agnostic interface + fallback chain | ⬜ | step 5 |
 | Server push dispatcher (APNs/FCM via Expo Push or direct) | ⬜ | step 6 |
-| Offline client queue + server dedup by event id | 🟡 | v1 has client queue; dedup is new |
+| Offline client queue + server dedup by event id | 🟡 | v1 has client queue; local↔server incident id map (`events.ts`) now carries LOCATION_UPDATE + BEACON_RESET to the server. Server-side dedup by client event id still ⬜. |
 | Dev / staging / production project separation | ⬜ | provision dev only this round |
 
 ## §11 Compliance
@@ -162,7 +162,7 @@ Last refreshed: end of scaffolding session.
 |---|---|---|
 | FERPA-aware roster/incident handling + school-official provisioning | ⬜ | |
 | COPPA path (parent-provisioned, verifiable consent) | 🚫 | P1 |
-| Configurable retention per campus + auto-purge of LocationPoints | ⬜ | |
+| Configurable retention per campus + auto-purge of LocationPoints | ✅ | `006`: pg_cron nightly `purge_location_points()` per `policy.retentionDays`. |
 | Consent records (timestamp + scope) | ⬜ | |
 | Immutable audit (actor + time + device) | ⬜ | |
 | Data minimization (parents see linked child only; students never see others' locations) | 🟡 | enforced in v1 UI; rules now enforce at DB layer (parent reads gated by `linkedStudents` claim; students restricted to own incident/location) |
