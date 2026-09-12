@@ -88,18 +88,21 @@ export async function postDeclareThreat(req: Request, res: Response): Promise<vo
 export async function postClearThreat(req: Request, res: Response): Promise<void> {
   const { campusId, uid } = requireCampus(req);
 
-  const { data: active, error: activeErr } = await admin
+  // Append-only log: the campus is armed iff the LATEST row is 'active'.
+  // (Filtering on status='active' would match the original declare row
+  // forever and let clear succeed repeatedly.)
+  const { data: latest, error: latestErr } = await admin
     .from('campus_threats')
     .select('id, status, at')
     .eq('campus_id', campusId)
-    .eq('status', 'active')
     .order('at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (activeErr) throw new Error(`campus_threats lookup: ${activeErr.message}`);
-  if (!active) {
+  if (latestErr) throw new Error(`campus_threats lookup: ${latestErr.message}`);
+  if (!latest || latest.status !== 'active') {
     throw new ApiError(409, 'NO_ACTIVE_THREAT', 'no active campus threat to clear');
   }
+  const active = latest;
 
   // Threats are append-only: insert a 'cleared' row referencing the same campus.
   const { data: inserted, error: insertErr } = await admin

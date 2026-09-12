@@ -1,4 +1,7 @@
-// POST /v1/auth/bootstrap — first-admin setup. Refuses once any org exists.
+// POST /v1/auth/bootstrap — self-serve campus creation (DECISIONS.md D1).
+// Any signed-in account that isn't yet a campus member may create an
+// Organization + Campus and becomes its first admin. Membership is still
+// one-campus-per-account (R8.1.2), so an existing member is refused.
 
 import type { Request, Response } from 'express';
 import { z } from 'zod';
@@ -20,21 +23,6 @@ export async function postBootstrap(req: Request, res: Response): Promise<void> 
   const parsed = Body.safeParse(req.body);
   if (!parsed.success) {
     throw new ApiError(400, 'BAD_REQUEST', parsed.error.errors[0]?.message ?? 'invalid body');
-  }
-
-  // Reject if any organization already exists.
-  const { data: existingOrg, error: orgErr } = await admin
-    .from('organizations')
-    .select('id')
-    .limit(1)
-    .maybeSingle();
-  if (orgErr) throw new Error(`organizations probe: ${orgErr.message}`);
-  if (existingOrg) {
-    throw new ApiError(
-      403,
-      'BOOTSTRAP_CLOSED',
-      'Bootstrap already completed — request a join code from an admin',
-    );
   }
 
   // Reject if caller is already in some campus.
@@ -78,6 +66,7 @@ export async function postBootstrap(req: Request, res: Response): Promise<void> 
   const body: Auth.BootstrapResponse = {
     uid,
     campusId: campus.id as string,
+    campusName: parsed.data.campusName,
     role: 'admin',
     displayName: parsed.data.displayName,
     isMinor: false,

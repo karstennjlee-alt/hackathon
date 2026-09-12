@@ -3,6 +3,7 @@
 // Routes:
 //   POST   /v1/incidents              — student activates a beacon
 //   POST   /v1/incidents/:id/clear    — staff/admin marks cleared (verify perm)
+//   POST   /v1/incidents/:id/reset    — owner (or staff) marks reset ("I'm okay")
 //   POST   /v1/incidents/:id/location — student streams a GPS point
 //
 // All writes go through `admin` (service_role) so RLS is bypassed.
@@ -138,6 +139,54 @@ export async function postClearIncident(req: Request, res: Response): Promise<vo
   });
 
   res.json({ id, status: 'cleared', clearedAt: new Date(clearedAtIso).getTime() });
+}
+
+// ─── POST /v1/incidents/:id/reset ─────────────────────────────────
+// R8.5.7 — the student who activated (or any staff) ends the incident.
+// Distinct from /clear (staff verification) so the audit log tells the
+// two apart. Idempotent: an already-ended incident returns 200.
+export async function postResetIncident(req: Request, res: Response): Promise<void> {
+  const { campusId, uid, role } = requireCampus(req);
+  const id = req.params.id;
+  if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
+    throw new ApiError(400, 'BAD_REQUEST', 'incident id is not a uuid', 'id');
+  }
+
+  const { data: row, error: lookupErr } = await admin
+    .from('incidents')
+    .select('id, campus_id, student_user_id, status')
+    .eq('id', id)
+    .maybeSingle();
+  if (lookupErr) throw new Error(`incidents lookup: ${lookupErr.message}`);
+  if (!row) throw new ApiError(404, 'NOT_FOUND', 'incident not found');
+  if (row.campus_id !== campusId) throw new ApiError(403, 'FORBIDDEN', 'incident is on a different campus');
+  const isOwner = row.student_user_id === uid;
+  const isStaff = role === 'staff' || role === 'admin';
+  if (!isOwner && !isStaff) {
+    throw new ApiError(403, 'FORBIDDEN', 'only the incident owner or staff can reset it');
+  }
+  if (row.status !== 'active') {
+    res.json({ id, status: row.status, alreadyEnded: true });
+    return;
+  }
+
+  const clearedAtIso = new Date().toISOString();
+  const { error: updErr } = await admin
+    .from('incidents')
+    .update({ status: 'reset', cleared_at: clearedAtIso })
+    .eq('id', id)
+    .eq('status', 'active');
+  if (updErr) throw new Error(`incidents update: ${updErr.message}`);
+
+  await audit({
+    campusId,
+    actorUserId: uid,
+    action: 'incident.reset',
+    target: id,
+    metadata: { by: isOwner ? 'owner' : 'staff' },
+  });
+
+  res.json({ id, status: 'reset', clearedAt: new Date(clearedAtIso).getTime() });
 }
 
 // ─── POST /v1/incidents/:id/location ──────────────────────────────

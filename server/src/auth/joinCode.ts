@@ -86,9 +86,17 @@ export async function postJoin(req: Request, res: Response): Promise<void> {
 
   await setSessionClaims(uid, { campusId: row.campus_id, role: row.role });
 
+  const { data: campus } = await admin
+    .from('campuses')
+    .select('name, branding')
+    .eq('id', row.campus_id)
+    .maybeSingle();
+  const branding = (campus?.branding ?? {}) as { displayName?: string };
+
   const body: Auth.JoinResponse = {
     uid,
     campusId: row.campus_id,
+    campusName: branding.displayName || (campus?.name as string) || 'Campus',
     role: row.role,
     displayName,
     isMinor: row.role === 'student',

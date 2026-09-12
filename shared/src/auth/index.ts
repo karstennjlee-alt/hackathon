@@ -25,6 +25,7 @@ export interface SessionRequest {}
 export interface SessionResponse {
   uid: ID;
   campusId: ID;
+  campusName: string; // branding.displayName, falling back to campuses.name
   role: Role;
   displayName: string;
   isMinor: boolean;
@@ -46,9 +47,9 @@ export type JoinResponse = SessionResponse;
 
 // ──────────────────────────────────────────────────────────────────
 // POST /v1/auth/bootstrap
-// One-time-only. The first authed user in a fresh deployment creates
-// an Organization + Campus and becomes its first admin. Refuses after
-// any Organization exists.
+// Self-serve campus creation (DECISIONS.md D1). A signed-in account with
+// no campus membership creates an Organization + Campus and becomes its
+// first admin. Refuses if the account is already a member somewhere.
 // ──────────────────────────────────────────────────────────────────
 export interface BootstrapRequest {
   orgName: string;

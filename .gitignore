@@ -51,3 +51,6 @@ GoogleService-Info.plist
 # Test
 coverage/
 qr.png
+
+# Supabase CLI link state
+supabase/.temp/

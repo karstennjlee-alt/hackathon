@@ -19,6 +19,7 @@ import {
 import {
   postActivateIncident,
   postClearIncident,
+  postResetIncident,
   postIncidentLocation,
 } from './incidents/routes';
 import { postDeclareThreat, postClearThreat } from './incidents/threat';
@@ -58,6 +59,13 @@ app.post(
   requireCampusMember,
   requirePermission('incident:verify'),
   asyncHandler(postClearIncident),
+);
+app.post(
+  '/v1/incidents/:id/reset',
+  verifyToken,
+  requireCampusMember,
+  requirePermission('beacon:reset'),
+  asyncHandler(postResetIncident),
 );
 app.post(
   '/v1/incidents/:id/location',
@@ -125,6 +133,7 @@ app.listen(port, () => {
       `    POST /v1/ai/polish-broadcast (Bearer + { draft, audience })\n` +
       `    POST /v1/incidents           (Bearer + { escalation?, lastKnownCoords?, zoneHint? })\n` +
       `    POST /v1/incidents/:id/clear (Bearer)  — staff/admin\n` +
+      `    POST /v1/incidents/:id/reset (Bearer)  — owner or staff\n` +
       `    POST /v1/incidents/:id/location (Bearer + { coords }) — owner only\n` +
       `    POST /v1/threat/declare      (Bearer) — step-up; gated by campus.policy\n` +
       `    POST /v1/threat/clear        (Bearer) — step-up\n` +

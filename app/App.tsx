@@ -286,8 +286,18 @@ const staffRoster: StaffRosterEntry[] = [
 
 type Profile =
   | { role: 'student'; studentId: string; studentName: string }
-  | { role: 'staff'; staffId: string; staffName: string; staffTitle: string }
+  | { role: 'staff'; staffId: string; staffName: string; staffTitle: string; isAdmin?: boolean }
   | { role: 'parent'; linkedStudentId: string; linkedStudentName: string };
+
+// Real signed-in identity, built by AppRoot from the v2 session. When set,
+// the monolith skips the demo roster picker, signs out through Supabase,
+// shows the real campus name, and lets the server (RBAC + step-up) be the
+// gate on campus-threat actions instead of the demo password.
+export type AppIdentity = {
+  profile: Profile;
+  campusName: string;
+  signOut: () => void;
+};
 
 const PROFILE_STORAGE_KEY = 'beacon5.profile.v1';
 
@@ -597,7 +607,8 @@ async function sendChatMessage(
 const ADMIN_STAFF_ID = 'staff-whitman';
 
 function isAdminProfile(profile: Profile | null): boolean {
-  return profile?.role === 'staff' && profile.staffId === ADMIN_STAFF_ID;
+  if (profile?.role !== 'staff') return false;
+  return profile.isAdmin ?? profile.staffId === ADMIN_STAFF_ID;
 }
 
 const THEME_STORAGE_KEY = 'beacon5.theme.v1';
@@ -901,9 +912,9 @@ const computeZoneVerifications = (
   return map;
 };
 
-export default function App() {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [profileLoaded, setProfileLoaded] = useState(false);
+export default function App({ identity = null }: { identity?: AppIdentity | null } = {}) {
+  const [profile, setProfile] = useState<Profile | null>(identity?.profile ?? null);
+  const [profileLoaded, setProfileLoaded] = useState(identity !== null);
   const [reports, setReports] = useState<Report[]>(seedReports);
   const [incident, setIncident] = useState<Incident | null>(null);
   const [escalationSheet, setEscalationSheet] = useState<'threat' | 'medical' | null>(null);
@@ -928,10 +939,18 @@ export default function App() {
   const mode: Mode = profile?.role ?? 'student';
 
   useEffect(() => {
-    loadProfile().then((p) => {
-      setProfile(p);
+    if (identity) {
+      setProfile(identity.profile);
       setProfileLoaded(true);
-    });
+    } else {
+      loadProfile().then((p) => {
+        setProfile(p);
+        setProfileLoaded(true);
+      });
+    }
+  }, [identity]);
+
+  useEffect(() => {
     loadThemeMode().then(setThemeMode);
   }, []);
 
@@ -1112,11 +1131,16 @@ export default function App() {
   };
 
   const onResetProfile = () => {
-    setProfile(null);
     setIncident(null);
     setReports(seedReports);
     setStaffConfirmed(new Set());
     resetAllNotifRefs();
+    if (identity) {
+      // Real session: AppRoot tears the tree down once Supabase signs out.
+      identity.signOut();
+      return;
+    }
+    setProfile(null);
     clearProfile().catch(() => undefined);
   };
 
@@ -1503,6 +1527,7 @@ export default function App() {
           mode={mode}
           locationToken={mode === 'parent' && parentActiveIncident ? 'active' : locationToken}
           profile={profile}
+          campusName={identity?.campusName}
           onSignOut={onResetProfile}
           notifPermitted={notifPermitted}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -1537,6 +1562,7 @@ export default function App() {
         {mode === 'staff' ? (
           <StaffMode
             profile={profile as Extract<Profile, { role: 'staff' }>}
+            campusName={identity?.campusName}
             metrics={metrics}
             reports={reports}
             verifications={verifications}
@@ -1587,6 +1613,7 @@ export default function App() {
       <ThreatPasswordModal
         visible={threatModalOpen}
         threatActive={showCampusBanner}
+        requirePassword={identity === null}
         onClose={() => setThreatModalOpen(false)}
         onConfirm={async () => {
           setThreatModalOpen(false);
@@ -1668,11 +1695,15 @@ function SettingsSheet({
 function ThreatPasswordModal({
   visible,
   threatActive,
+  requirePassword = true,
   onClose,
   onConfirm,
 }: {
   visible: boolean;
   threatActive: boolean;
+  // Demo mode only. Signed-in users are gated server-side by RBAC +
+  // campus policy + step-up; the modal is then a plain confirm (R8.4.5).
+  requirePassword?: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void>;
 }) {
@@ -1688,7 +1719,7 @@ function ThreatPasswordModal({
   }, [visible]);
   const submit = async () => {
     if (busy) return;
-    if (pw.trim() !== PRINCIPAL_PASSWORD) {
+    if (requirePassword && pw.trim() !== PRINCIPAL_PASSWORD) {
       setError('Incorrect password.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       return;
@@ -1705,23 +1736,26 @@ function ThreatPasswordModal({
           </Text>
           <Text style={styles.pwModalCopy}>
             {threatActive
-              ? 'Clearing the threat stops live tracking on every student device. Enter the principal password to confirm.'
-              : 'Declaring a campus threat unlocks live GPS sharing on every student device and notifies guardians instantly. Enter the principal password to confirm.'}
+              ? 'Clearing the threat stops live tracking on every student device.'
+              : 'Declaring a campus threat unlocks live GPS sharing on every student device and notifies guardians instantly.'}
+            {requirePassword ? ' Enter the principal password to confirm.' : ' This action is logged with your name.'}
           </Text>
-          <TextInput
-            value={pw}
-            onChangeText={(t) => {
-              setPw(t);
-              setError(null);
-            }}
-            placeholder="Principal password"
-            placeholderTextColor="#71717a"
-            secureTextEntry
-            autoFocus
-            style={styles.pwInput}
-            onSubmitEditing={submit}
-            accessibilityLabel="Principal password"
-          />
+          {requirePassword ? (
+            <TextInput
+              value={pw}
+              onChangeText={(t) => {
+                setPw(t);
+                setError(null);
+              }}
+              placeholder="Principal password"
+              placeholderTextColor="#71717a"
+              secureTextEntry
+              autoFocus
+              style={styles.pwInput}
+              onSubmitEditing={submit}
+              accessibilityLabel="Principal password"
+            />
+          ) : null}
           {error ? <Text style={styles.pwError} accessibilityLiveRegion="polite" accessibilityRole="alert">{error}</Text> : null}
           <View style={styles.pwActions}>
             <Pressable onPress={onClose} style={styles.pwCancel} accessibilityRole="button" accessibilityLabel="Cancel">
@@ -1951,6 +1985,7 @@ function Header({
   mode,
   locationToken,
   profile,
+  campusName,
   onSignOut,
   onOpenSettings,
   themeMode,
@@ -1958,6 +1993,7 @@ function Header({
   mode: Mode;
   locationToken: LocationToken;
   profile: Profile;
+  campusName?: string;
   onSignOut: () => void;
   notifPermitted?: boolean;
   onOpenSettings?: () => void;
@@ -1973,7 +2009,7 @@ function Header({
         : `Guardian of ${profile.linkedStudentName}`;
   const subtitle =
     mode === 'student'
-      ? 'Campus Grid - San Jose High'
+      ? `Campus Grid - ${campusName ?? 'San Jose High'}`
       : mode === 'staff'
         ? 'Mission Control - Live'
         : 'Parent Verification Secure';
@@ -3109,6 +3145,7 @@ function NoteCard({ label, text, accent }: { label: string; text: string; accent
 // =====================================================================
 function StaffMode({
   profile,
+  campusName,
   now,
   activeIncidents,
   events,
@@ -3120,6 +3157,7 @@ function StaffMode({
   themeMode,
 }: {
   profile: Extract<Profile, { role: 'staff' }>;
+  campusName?: string;
   metrics: Record<StatusKey, number>;
   reports: Report[];
   verifications: Map<string, VerificationState>;
@@ -3163,7 +3201,7 @@ function StaffMode({
     }
     const briefInput = {
       incidentType: `Beacon activated by ${top.studentName}`,
-      campusName: profile.campusName ?? 'campus',
+      campusName: campusName ?? 'campus',
       location: top.zoneDescription ?? (top.coords
         ? `GPS ${top.coords.latitude.toFixed(5)}, ${top.coords.longitude.toFixed(5)}`
         : 'unknown'),

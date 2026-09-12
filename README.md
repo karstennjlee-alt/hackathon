@@ -67,27 +67,18 @@ If you start either of the above and any required env var is missing, the env va
 
 ## What's done vs what's next
 
-This branch is at the end of **Phase 0 step 0** (scaffolding). See [TODO.md](TODO.md) for the full picture.
+See [TODO.md](TODO.md) for the requirement-level picture.
 
-**Done this session:**
-- v2 branch created
-- All Phase-0 planning docs written
-- Monorepo skeleton with `app/`, `admin/`, `server/`, `shared/`
-- 3 `.env.example` files (one per package, client-safe vs server-only firewall)
-- zod env validation that fails loud at boot
+**Working end-to-end against the dev Supabase project (verified 2026-09-11):**
+- Sign in → `JoinCampusScreen` → redeem a join code *or* create a new campus (self-serve, D1)
+- Monolith runs off the real identity (`AppIdentity`): no roster picker, real campus name, Supabase sign-out
+- Incident lifecycle: activate → location stream → reset/clear, mirrored to the server and back to every device via Realtime (INSERT + UPDATE)
+- Campus threat declare/clear, chat, mass + staff broadcasts, AI proxy with Gemini → template fallback
+- Migrations `002` (students read their own broadcasts) and `003` (join-code FK fix) applied
 
-**Next session:**
-- Phase 0 step 1 — multi-tenant data model + Firestore/RTDB security rules scoped by `campusId`
-- Phase 0 step 2 — real auth (email/OTP + Apple + Google) with verified org binding
-
----
-
-## v1 (hackathon prototype)
-
-`git checkout main`. The 6000-line single-file Expo app that won 1st place at Synthesis Hacks lives there, untouched. Don't lose it.
-
----
-
-## Disclaimer
-
-Beacon5 supports — never replaces — 911 and the school's crisis plan. The product is designed to coordinate trained human responders, not to dispatch them.
+**Next:**
+- Real step-up auth (Supabase MFA `aal2` or re-auth challenge) — the current `iat` check is cosmetic
+- Server push (Expo Push) — notifications are still local-only
+- Guardian linking + parent join path
+- Admin console (`admin/` is still a README)
+- Split `App.tsx` into modules (step 7)

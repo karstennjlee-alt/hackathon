@@ -33,7 +33,10 @@ const MATRIX: Record<Role, Permission[]> = {
     'incident:verify',
     'chat:send',
     'broadcast:send-staff-scoped',
-    // 'threat:declare' is governed by Campus.policy.whoCanDeclareThreat
+    // Baseline grant per D4 (default 'any-staff'). The declare route then
+    // applies Campus.policy.whoCanDeclareThreat, which can narrow this to
+    // admin-only per campus — the matrix must not pre-empt the policy.
+    'threat:declare',
     'threat:clear',
     'allclear:send',
     'joincode:issue',

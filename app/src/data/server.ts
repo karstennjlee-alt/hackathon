@@ -45,6 +45,40 @@ export function postActivateIncident(input: {
   return post('/v1/incidents', input);
 }
 
+export function postResetIncident(
+  serverIncidentId: string,
+): Promise<{ id: string; status: string; clearedAt?: number; alreadyEnded?: boolean } | null> {
+  return post(`/v1/incidents/${encodeURIComponent(serverIncidentId)}/reset`, {});
+}
+
+export function postClearIncident(
+  serverIncidentId: string,
+): Promise<{ id: string; status: string; clearedAt?: number; alreadyCleared?: boolean } | null> {
+  return post(`/v1/incidents/${encodeURIComponent(serverIncidentId)}/clear`, {});
+}
+
+export async function postIncidentLocation(
+  serverIncidentId: string,
+  coords: { lat: number; lng: number; accuracy?: number },
+): Promise<void> {
+  // 204 No Content on success — post() would choke on res.json().
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return;
+  const res = await fetch(
+    `${env.EXPO_PUBLIC_API_BASE_URL}/v1/incidents/${encodeURIComponent(serverIncidentId)}/location`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ coords }),
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`/v1/incidents/:id/location ${res.status}: ${text.slice(0, 240)}`);
+  }
+}
+
 // ─── threat ───────────────────────────────────────────────────────
 export function postDeclareThreat(): Promise<{ id: string; status: 'active'; at: number } | null> {
   return post('/v1/threat/declare', {});

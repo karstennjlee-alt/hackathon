@@ -14,13 +14,20 @@ Two ways:
 
 The file is idempotent — re-running is safe (every `CREATE` uses `IF NOT EXISTS`).
 
-### B. CLI (recommended once you have one)
+### B. CLI (recommended)
 
 ```bash
 brew install supabase/tap/supabase
-supabase link --project-ref iyjoqlixbatyfguxizko
-supabase db push                       # pushes migrations/ to the linked project
+supabase login
+supabase link --project-ref iyjoqlixbatyfguxizko --skip-pooler -p ""
+supabase db query --linked -f supabase/migrations/00N_whatever.sql   # via Management API, no DB password needed
 ```
+
+`supabase db push` also works but needs the Postgres password. The free-tier project
+**pauses after ~7 days idle** and drops DNS while paused (`NXDOMAIN`, not a 5xx) — restore it
+from the dashboard before debugging "can't connect".
+
+Applied so far: `001_init.sql`, `002_student_broadcasts.sql`, `003_join_code_consumer_fk.sql`.
 
 ## Auth provider setup (do this in the dashboard)
 

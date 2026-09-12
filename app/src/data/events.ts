@@ -15,9 +15,12 @@ import { supabase } from '../supabase';
 import {
   postActivateIncident,
   postChatMessage,
+  postClearIncident,
   postClearThreat,
   postDeclareThreat,
+  postIncidentLocation,
   postMassMessage,
+  postResetIncident,
   postStaffBroadcast,
 } from './server';
 
@@ -99,6 +102,8 @@ export function setStorageScope(userId: string | null): void {
   // from the new bucket. Don't touch the previous bucket on disk — it
   // belongs to the previous account and will be there when they return.
   dispatchedIds.clear();
+  serverIncidentIds.clear();
+  activeLocalIncidentByStudent.clear();
   store.events = [];
   store.hydrated = false;
   store.hydrating = null;
@@ -172,10 +177,82 @@ export function resetEventStoreForSignOut(): void {
   // a fresh sign-in starts clean. AsyncStorage stays — it's tied to the
   // device, not the account — and re-hydrates on next subscribe.
   dispatchedIds.clear();
+  serverIncidentIds.clear();
+  activeLocalIncidentByStudent.clear();
   store.events = [];
   store.hydrated = false;
   store.hydrating = null;
   notify();
+}
+
+// ─── local ↔ server incident id map ───────────────────────────────
+// The monolith mints its own incident ids (`inc-…`) and appends
+// LOCATION_UPDATEs *before* the BEACON_ACTIVATED event (it acquires a
+// fix first), while the server hands back a uuid only once activation
+// lands. So:
+//   - lookups return a promise that resolves when the id is known;
+//   - the map is mirrored to AsyncStorage because the background
+//     location task runs in its own JS context and can't see module state;
+//   - ids that already look like uuids (events that arrived via realtime
+//     on a staff device) pass straight through.
+const SERVER_ID_KEY_PREFIX = 'beacon5.serverIncident.';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ID_WAIT_MS = 30_000;
+
+interface Deferred { promise: Promise<string | null>; resolve: (v: string | null) => void }
+const serverIncidentIds = new Map<string, Deferred>();
+const activeLocalIncidentByStudent = new Map<string, string>();
+
+function deferredFor(localId: string): Deferred {
+  let d = serverIncidentIds.get(localId);
+  if (d) return d;
+  let resolve: (v: string | null) => void = () => undefined;
+  const promise = new Promise<string | null>((r) => {
+    resolve = r;
+    setTimeout(() => r(null), ID_WAIT_MS);
+  });
+  d = { promise, resolve };
+  serverIncidentIds.set(localId, d);
+  return d;
+}
+
+function rememberServerIncidentId(localId: string, serverId: string): void {
+  deferredFor(localId).resolve(serverId);
+  void AsyncStorage.setItem(SERVER_ID_KEY_PREFIX + localId, serverId).catch(() => undefined);
+}
+
+async function serverIncidentIdFor(localOrServerId: string): Promise<string | null> {
+  if (UUID_RE.test(localOrServerId)) return localOrServerId;
+  const existing = serverIncidentIds.get(localOrServerId);
+  if (existing) return existing.promise;
+  // Cold miss (e.g. background task context) — try disk before waiting.
+  try {
+    const stored = await AsyncStorage.getItem(SERVER_ID_KEY_PREFIX + localOrServerId);
+    if (stored) {
+      rememberServerIncidentId(localOrServerId, stored);
+      return stored;
+    }
+  } catch {
+    // fall through to the deferred
+  }
+  return deferredFor(localOrServerId).promise;
+}
+
+function forgetIncident(localId: string): void {
+  serverIncidentIds.delete(localId);
+  void AsyncStorage.removeItem(SERVER_ID_KEY_PREFIX + localId).catch(() => undefined);
+}
+
+// Latest BEACON_ACTIVATED id for a student in the local store — on a staff
+// device this is already the server uuid (it arrived via realtime).
+function latestActivationIdFor(studentId: string): string | null {
+  const evs = store.events as Array<{ type: string; studentId?: string; id: string }>;
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const e = evs[i];
+    if (e.type === 'BEACON_RESET' && e.studentId === studentId) return null;
+    if (e.type === 'BEACON_ACTIVATED' && e.studentId === studentId) return e.id;
+  }
+  return null;
 }
 
 // ─── server dispatch (7c1) ────────────────────────────────────────
@@ -225,14 +302,50 @@ async function dispatchToServer<E>(raw: E): Promise<void> {
   try {
     switch (event.type) {
       case 'BEACON_ACTIVATED': {
+        const localId = typeof event.id === 'string' ? event.id : '';
+        const studentId = typeof event.studentId === 'string' ? event.studentId : '';
+        if (localId && studentId) activeLocalIncidentByStudent.set(studentId, localId);
         const coords = coerceCoords(event.coords);
-        const r = await postActivateIncident({
-          ...(coords ? { lastKnownCoords: coords } : {}),
-          ...(typeof event.zoneDescription === 'string' && event.zoneDescription
-            ? { zoneHint: event.zoneDescription }
-            : {}),
-        });
+        let r: { id: string; alreadyActive?: boolean } | null = null;
+        try {
+          r = await postActivateIncident({
+            ...(coords ? { lastKnownCoords: coords } : {}),
+            ...(typeof event.zoneDescription === 'string' && event.zoneDescription
+              ? { zoneHint: event.zoneDescription }
+              : {}),
+          });
+        } finally {
+          // Resolve waiters either way so queued LOCATION_UPDATEs don't hang.
+          if (localId) {
+            if (r?.id) rememberServerIncidentId(localId, r.id);
+            else deferredFor(localId).resolve(null);
+          }
+        }
         if (r?.id) markDispatched(r.id);
+        return;
+      }
+      case 'LOCATION_UPDATE': {
+        const coords = coerceCoords(event.coords);
+        if (!coords || typeof event.incidentId !== 'string') return;
+        const serverId = await serverIncidentIdFor(event.incidentId);
+        if (!serverId) return;
+        await postIncidentLocation(serverId, coords);
+        return;
+      }
+      case 'BEACON_RESET': {
+        const studentId = typeof event.studentId === 'string' ? event.studentId : '';
+        if (!studentId) return;
+        const localId = activeLocalIncidentByStudent.get(studentId) ?? latestActivationIdFor(studentId);
+        activeLocalIncidentByStudent.delete(studentId);
+        if (!localId) return;
+        const serverId = await serverIncidentIdFor(localId);
+        if (!serverId) return;
+        markDispatched(`${serverId}:reset`);
+        try {
+          await postResetIncident(serverId);
+        } finally {
+          forgetIncident(localId);
+        }
         return;
       }
       case 'CAMPUS_THREAT': {
@@ -271,6 +384,18 @@ async function dispatchToServer<E>(raw: E): Promise<void> {
           typeof event.message !== 'string' ||
           !event.message.trim()
         ) return;
+        // An all-clear ends the student's incident locally (deriveActiveIncidents);
+        // mirror that on the server so the row doesn't stay 'active' forever.
+        if (event.kind === 'all_clear') {
+          const activationId = latestActivationIdFor(event.studentId);
+          if (activationId) {
+            const serverId = await serverIncidentIdFor(activationId);
+            if (serverId) {
+              markDispatched(`${serverId}:reset`);
+              await postClearIncident(serverId).catch(() => undefined);
+            }
+          }
+        }
         const r = await postStaffBroadcast({
           studentUserId: event.studentId,
           body: event.message,
@@ -278,9 +403,7 @@ async function dispatchToServer<E>(raw: E): Promise<void> {
         if (r?.id) markDispatched(r.id);
         return;
       }
-      // BEACON_RESET, INCIDENT_NOTE, LOCATION_UPDATE: still local-only.
-      // LOCATION_UPDATE needs the server incident-id mapping that we don't
-      // track yet; BEACON_RESET + INCIDENT_NOTE have no server analogue.
+      // INCIDENT_NOTE: still local-only — no server analogue yet.
       default:
         return;
     }

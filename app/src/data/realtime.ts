@@ -45,12 +45,32 @@ interface IncidentRow {
   student_user_id: string;
   status: 'active' | 'cleared' | 'reset';
   activated_at: string;
+  cleared_at?: string | null;
   last_known_coords?: unknown;
   zone_hint?: string | null;
 }
 
+// An incident row leaving 'active' (student reset or staff clear) becomes
+// a BEACON_RESET so deriveActiveIncidents drops it on every device. The
+// id is derived from the incident id so the device that performed the
+// reset can markDispatched() the same key and skip its own echo.
+function fromIncidentEnded(row: IncidentRow): unknown | null {
+  if (row.status === 'active') return null;
+  return {
+    type: 'BEACON_RESET',
+    id: `${row.id}:reset`,
+    studentId: row.student_user_id,
+    at: toMs(row.cleared_at ?? row.activated_at),
+  };
+}
+
+// Live INSERTs: only active rows become an activation event.
 async function fromIncident(row: IncidentRow): Promise<unknown | null> {
   if (row.status !== 'active') return null;
+  return fromIncidentActivation(row);
+}
+
+async function fromIncidentActivation(row: IncidentRow): Promise<unknown | null> {
   const studentName = await lookupUserName(row.student_user_id);
   return {
     type: 'BEACON_ACTIVATED',
@@ -203,7 +223,7 @@ async function backfillCampus(campusId: string): Promise<void> {
     const [incidents, threats, messages, locations] = await Promise.all([
       supabase
         .from('incidents')
-        .select('id, campus_id, student_user_id, status, activated_at, last_known_coords, zone_hint')
+        .select('id, campus_id, student_user_id, status, activated_at, cleared_at, last_known_coords, zone_hint')
         .eq('campus_id', campusId)
         .gte('activated_at', sinceIso)
         .order('activated_at', { ascending: true }),
@@ -227,7 +247,13 @@ async function backfillCampus(campusId: string): Promise<void> {
         .order('at', { ascending: true }),
     ]);
 
-    for (const row of incidents.data ?? []) await safeMerge(await fromIncident(row as IncidentRow));
+    for (const row of incidents.data ?? []) {
+      // Ended incidents need both events, in order, or the activation would
+      // show as live on a device that joined after it ended.
+      const r = row as IncidentRow;
+      await safeMerge(await fromIncidentActivation(r));
+      await safeMerge(fromIncidentEnded(r));
+    }
     for (const row of threats.data ?? []) await safeMerge(await fromThreat(row as ThreatRow));
     for (const row of messages.data ?? []) await safeMerge(await fromMessage(row as MessageRow));
     for (const row of locations.data ?? []) await safeMerge(await fromLocation(row as LocationRow));
@@ -249,20 +275,22 @@ export async function startRealtimeSync(campusId: string): Promise<void> {
     const filter = `campus_id=eq.${campusId}`;
     const tables: Array<{
       table: 'incidents' | 'campus_threats' | 'messages' | 'location_points';
+      event: 'INSERT' | 'UPDATE';
       transform: (row: unknown) => Promise<unknown | null> | unknown | null;
     }> = [
-      { table: 'incidents',       transform: (r) => fromIncident(r as IncidentRow) },
-      { table: 'campus_threats',  transform: (r) => fromThreat(r as ThreatRow) },
-      { table: 'messages',        transform: (r) => fromMessage(r as MessageRow) },
-      { table: 'location_points', transform: (r) => fromLocation(r as LocationRow) },
+      { table: 'incidents',       event: 'INSERT', transform: (r) => fromIncident(r as IncidentRow) },
+      { table: 'incidents',       event: 'UPDATE', transform: (r) => fromIncidentEnded(r as IncidentRow) },
+      { table: 'campus_threats',  event: 'INSERT', transform: (r) => fromThreat(r as ThreatRow) },
+      { table: 'messages',        event: 'INSERT', transform: (r) => fromMessage(r as MessageRow) },
+      { table: 'location_points', event: 'INSERT', transform: (r) => fromLocation(r as LocationRow) },
     ];
 
-    for (const { table, transform } of tables) {
+    for (const { table, event, transform } of tables) {
       const ch = supabase
-        .channel(`beacon5:${table}:${campusId}`)
+        .channel(`beacon5:${table}:${event}:${campusId}`)
         .on(
           'postgres_changes' as never,
-          { event: 'INSERT', schema: 'public', table, filter } as never,
+          { event, schema: 'public', table, filter } as never,
           (payload: RealtimePayload<unknown>) => {
             void Promise.resolve(transform(payload.new)).then(safeMerge);
           },

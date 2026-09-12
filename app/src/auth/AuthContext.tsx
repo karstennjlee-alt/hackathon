@@ -15,6 +15,7 @@ type Role = 'student' | 'parent' | 'staff' | 'admin';
 export interface BeaconSession {
   uid: string;
   campusId: string | null;
+  campusName: string | null;
   role: Role | null;
   displayName: string | null;
   isMinor: boolean;
@@ -27,6 +28,8 @@ interface AuthContextValue {
   user: SupaUser | null;
   beacon: BeaconSession | null;
   refresh: () => Promise<void>;
+  // Demo mode is only reachable when EXPO_PUBLIC_DEMO=true (DECISIONS D11).
+  demoAvailable: boolean;
   demoMode: boolean;
   enterDemo: () => void;
   exitDemo: () => void;
@@ -45,6 +48,7 @@ async function fetchBeaconSession(jwt: string): Promise<BeaconSession | null> {
     return {
       uid: '',
       campusId: null,
+      campusName: null,
       role: null,
       displayName: null,
       isMinor: false,
@@ -58,6 +62,7 @@ async function fetchBeaconSession(jwt: string): Promise<BeaconSession | null> {
   const body = (await res.json()) as {
     uid: string;
     campusId: string;
+    campusName: string;
     role: Role;
     displayName: string;
     isMinor: boolean;
@@ -136,8 +141,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         const { data } = await supabase.auth.getSession();
         await applySession(data.session);
       },
+      demoAvailable: env.EXPO_PUBLIC_DEMO,
       demoMode,
-      enterDemo: () => setDemoMode(true),
+      enterDemo: () => {
+        if (env.EXPO_PUBLIC_DEMO) setDemoMode(true);
+      },
       exitDemo: () => setDemoMode(false),
     }),
     [loading, session, beacon, demoMode],
