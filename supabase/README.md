@@ -27,7 +27,7 @@ supabase db query --linked -f supabase/migrations/00N_whatever.sql   # via Manag
 **pauses after ~7 days idle** and drops DNS while paused (`NXDOMAIN`, not a 5xx) — restore it
 from the dashboard before debugging "can't connect".
 
-Applied so far: `001_init.sql`, `002_student_broadcasts.sql`, `003_join_code_consumer_fk.sql`.
+Applied so far: `001`–`005` (init, student broadcasts, join-code FK, student credentials, staff names readable).
 
 ## Auth provider setup (do this in the dashboard)
 

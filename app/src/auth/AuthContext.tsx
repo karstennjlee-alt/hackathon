@@ -102,9 +102,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       // half-finished session doesn't leak into the demo bucket.
       const scope = b?.uid || s.user?.id || null;
       setStorageScope(scope);
-      // Refresh the local JWT so the new app_metadata claims are picked up.
       if (b?.campusId) {
-        await supabase.auth.refreshSession();
+        // Refresh the local JWT only if it doesn't already carry the campus
+        // claim. Refreshing unconditionally re-enters this function through
+        // the TOKEN_REFRESHED event and loops until Supabase's refresh-token
+        // reuse detection signs the user out.
+        const claims = (s.user?.app_metadata ?? {}) as { campus_id?: string };
+        if (claims.campus_id !== b.campusId) {
+          await supabase.auth.refreshSession();
+        }
         void startRealtimeSync(b.campusId);
       } else {
         void stopRealtimeSync();
@@ -125,7 +131,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         setLoading(false);
       }
     })();
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      // A token refresh doesn't change membership — just keep the session
+      // object current. Re-running the membership fetch here would refresh
+      // again and loop.
+      if (event === 'TOKEN_REFRESHED') {
+        setSession(s);
+        return;
+      }
       void applySession(s);
     });
     return () => {

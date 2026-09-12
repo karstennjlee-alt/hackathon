@@ -68,7 +68,7 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
   async function studentSubmit(): Promise<void> {
     setStatus({ kind: 'busy', provider: 'student' });
     try {
-      await signInAsStudent(campusCode, studentId, pin);
+      await signInAsStudent(campusCode.replace(/[\s-]/g, '').toUpperCase(), studentId, pinDigits);
       setStatus({ kind: 'idle' });
     } catch (err) {
       setStatus({ kind: 'error', message: describeStudentError(err) });
@@ -107,7 +107,10 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
 
   const busy = status.kind === 'busy';
   const busyProvider = status.kind === 'busy' ? status.provider : null;
-  const studentReady = campusCode.replace(/[\s-]/g, '').length >= 3 && studentId.trim().length > 0 && /^\d{4,8}$/.test(pin);
+  // Don't rewrite controlled values in onChangeText (dropped keystrokes on
+  // fast input); normalise here and let the server normalise again.
+  const pinDigits = pin.replace(/\D/g, '');
+  const studentReady = campusCode.replace(/[\s-]/g, '').length >= 3 && studentId.trim().length > 0 && /^\d{4,8}$/.test(pinDigits);
 
   return (
     <View style={styles.root}>
@@ -162,7 +165,7 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
                   autoCorrect={false}
                   accessibilityLabel="Campus code"
                   value={campusCode}
-                  onChangeText={(t) => setCampusCode(t.toUpperCase())}
+                  onChangeText={setCampusCode}
                   editable={!busy}
                   returnKeyType="next"
                 />
@@ -194,7 +197,7 @@ export function SignInScreen({ campusName }: { campusName?: string }): React.JSX
                   maxLength={8}
                   accessibilityLabel="PIN"
                   value={pin}
-                  onChangeText={(t) => setPin(t.replace(/\D/g, ''))}
+                  onChangeText={setPin}
                   editable={!busy}
                   returnKeyType="go"
                   onSubmitEditing={() => { if (studentReady) void studentSubmit(); }}
